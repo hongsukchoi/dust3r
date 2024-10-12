@@ -23,6 +23,7 @@ setup(
     ],
     extras_require={
         'all': [
+            croco @ git+https://github.com/hongsukchoi/croco.git
         ],
     },
 )
