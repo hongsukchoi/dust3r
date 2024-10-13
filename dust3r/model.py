@@ -14,8 +14,9 @@ from .utils.misc import fill_default_args, freeze_all_params, is_symmetrized, in
 from .heads import head_factory
 from dust3r.patch_embed import get_patch_embed
 
-import dust3r.utils.path_to_croco  # noqa: F401
-from models.croco import CroCoNet  # noqa
+# import dust3r.utils.path_to_croco  # noqa: F401
+# from models.croco import CroCoNet  # noqa
+from croco.models.croco import CroCoNet  # noqa
 
 inf = float('inf')
 
