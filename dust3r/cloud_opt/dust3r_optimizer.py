@@ -7,15 +7,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import cv2
-import os.path as osp
 
 from dust3r.cloud_opt.base_opt import BasePCOptimizer
 from dust3r.utils.geometry import xy_grid, geotrf
 from dust3r.utils.device import to_cpu, to_numpy
-
-from multihmr.blocks import SMPL_Layer
-from multihmr.utils import get_smplx_joint_names
 
 
 class PointCloudOptimizer(BasePCOptimizer):
@@ -29,31 +24,6 @@ class PointCloudOptimizer(BasePCOptimizer):
 
         self.has_im_poses = True  # by definition of this class
         self.focal_break = focal_break
-
-        # Hongsuk added
-        self.has_human_cue = True
-        self.human_loss_weight = 15.0
-        self.smplx_layer = SMPL_Layer(type='smplx', gender='neutral', num_betas=10, kid=False, person_center='head')
-
-        # make smplx_layer.bm_x attributes all requires.grad False
-        # Note that self.human_transl and self.human_global_rotvec are independent from smplx_layer.bm_x according to MultiHMR code
-        for attr in ['betas', 'global_orient', 'body_pose', 'transl', 'left_hand_pose', 'right_hand_pose', 'jaw_pose', 'leye_pose', 'reye_pose', 'expression']:
-            # self.smplx_layer.bm_x.__setattr__(attr).requires_grad_(False)
-            getattr(self.smplx_layer.bm_x, attr).requires_grad_(False)
-
-        # initialize with random values
-        # at the moment, only single person
-        # these are things to optimize! - Hongsuk
-        self.human_transl = nn.Parameter(torch.randn(1, 3).to(self.device)) # (1, 3)
-        self.human_global_rotvec = nn.Parameter(torch.randn(1, 1, 3).to(self.device)) # (1, 1, 3)
-        self.human_relative_rotvec = nn.Parameter(torch.randn(1, 52, 3).to(self.device)) # (1, 52, 3)
-        self.human_shape = nn.Parameter(torch.randn(1, 10).to(self.device)) # (1, 10)
-        self.human_expression = nn.Parameter(torch.randn(1, 10).to(self.device)) # (1, 10)
-
-        # set human_relative_rotvec, human_shape, human_expression requires_grad to False
-        # self.human_relative_rotvec.requires_grad_(False)
-        # self.human_shape.requires_grad_(False)
-        self.human_expression.requires_grad_(False)
 
         # adding thing to optimize
         self.im_depthmaps = nn.ParameterList(torch.randn(H, W)/10-3 for H, W in self.imshapes)  # log(depth)
@@ -219,52 +189,6 @@ class PointCloudOptimizer(BasePCOptimizer):
         if not raw:
             res = [dm[:h*w].view(h, w, 3) for dm, (h, w) in zip(res, self.imshapes)]
         return res
-    
-    def get_smplx_params(self):
-        # return the parameters as dictionary
-        return {
-            'global_rotvec': self.human_global_rotvec.detach(),
-            'relative_rotvec': self.human_relative_rotvec.detach(),
-            'transl': self.human_transl.detach(),
-            'shape': self.human_shape.detach(),
-            'expression': self.human_expression.detach()
-        }
-    
-    def get_smplx_output(self):
-        pose = torch.cat((self.human_global_rotvec, self.human_relative_rotvec), dim=1) # (1, 53, 3)
-        smplx_output = self.smplx_layer(transl=self.human_transl,
-                                 pose=pose,
-                                 shape=self.human_shape,
-                                 K=torch.zeros((len(pose), 3, 3), device=self.device),  # dummy
-                                 expression=self.human_expression,
-                                 loc=None,
-                                 dist=None)
-
-        return smplx_output
-    
-    def save_2d_joints(self):
-        smplx_output = self.get_smplx_output()
-        smplx_j3d = smplx_output['j3d'][:, :get_smplx_joint_names().index('jaw')] # (1, J, 3)
-        smplx_j3d = smplx_j3d.repeat(self.n_imgs, 1, 1) # (self.n_imgs, J, 3)
-
-        cam2world_4by4 = self.get_im_poses() # (self.n_imgs, 4, 4)
-        world2cam_4by4 = torch.inverse(cam2world_4by4) # (self.n_imgs, 4, 4)
-        K_all = self.get_intrinsics() # (self.n_imgs, 3, 3)
-
-        proj = geotrf(world2cam_4by4, smplx_j3d)
-        smplx_j2d = geotrf(K_all, proj, norm=1, ncol=2) # (self.n_imgs, J, 2)
-
-        # draw the 2d joints on the image
-        for img_idx in range(self.n_imgs):
-            img = self.imgs[img_idx].copy() * 255.
-            img = img.astype(np.uint8) 
-            for joint in smplx_j2d[img_idx]:
-                img = cv2.circle(img, (int(joint[0]), int(joint[1])), 3, (0, 255, 0), -1) 
-
-            tmp_output_path = osp.join('/home/hongsuk/projects/dust3r/outputs/egoexo/optimized_2d_joints', f'{img_idx}.png')
-            cv2.imwrite(tmp_output_path, img[...,::-1])
-
-        return smplx_j2d
 
     def forward(self):
         pw_poses = self.get_pw_poses()  # cam-to-world
@@ -279,37 +203,7 @@ class PointCloudOptimizer(BasePCOptimizer):
         li = self.dist(proj_pts3d[self._ei], aligned_pred_i, weight=self._weight_i).sum() / self.total_area_i
         lj = self.dist(proj_pts3d[self._ej], aligned_pred_j, weight=self._weight_j).sum() / self.total_area_j
 
-        loss = li + lj
-
-        # Hongsuk added
-        if self.has_human_cue:
-            cam2world_4by4 = self.get_im_poses() # (self.n_imgs, 4, 4)
-            world2cam_4by4 = torch.inverse(cam2world_4by4) # (self.n_imgs, 4, 4)
-            K_all = self.get_intrinsics() # (self.n_imgs, 3, 3)
-
-            # decode the smpl mesh and joints
-            smplx_output = self.get_smplx_output()
-            smplx_j3d = smplx_output['j3d'][:, :get_smplx_joint_names().index('jaw')] # (1, J, 3), joints in the world coordinate from the world mesh decoded by the optimizing parameters
-            # tile the smplx_j3d to the number of images
-            smplx_j3d = smplx_j3d.repeat(self.n_imgs, 1, 1)
-
-            # transform and proejct the 3d joints to the image plane 
-            # let's use their code!
-            proj = geotrf(world2cam_4by4, smplx_j3d)
-            smplx_j2d = geotrf(K_all, proj, norm=1, ncol=2) # (self.n_imgs, J, 2)
-
-            # compute the distance between the projected 2d joints and the given 2d joints
-            # using the weight from the human_det_score and inverse of the human_bbox's area
-            human_loss = ((smplx_j2d - self.human_j2d).abs().sum(dim=[1,2]) * self.human_weight).sum() # self.dist(smplx_j2d, self.human_j2d, weight=human_weight).sum() 
-            human_loss = self.human_loss_weight * human_loss / self.max_area
-
-            loss += human_loss
-            
-            return loss, float(human_loss)
-        else:
-            return loss, None
-
-       
+        return li + lj
 
 
 def _fast_depthmap_to_pts3d(depth, pixel_grid, focal, pp):

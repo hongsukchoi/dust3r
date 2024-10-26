@@ -19,7 +19,6 @@ from dust3r.viz import to_numpy
 
 from dust3r.cloud_opt.commons import edge_str, i_j_ij, compute_edge_scores
 
-
 @torch.no_grad()
 def init_from_known_poses(self, niter_PnP=10, min_conf_thr=3):
     device = self.device
@@ -76,6 +75,47 @@ def init_minimum_spanning_tree(self, **kw):
 
     return init_from_pts3d(self, pts3d, im_focals, im_poses)
 
+def init_from_pts3d_and_smplx(self, pts3d, im_focals, im_poses, smplx_3d_params, smplx_2d_data):
+    init_from_smplx(self, smplx_3d_params, smplx_2d_data)
+    init_from_pts3d(self, pts3d, im_focals, im_poses)
+
+def init_from_smplx(self, smplx_3d_params, smplx_2d_data_list):
+    # first extract data from the dictionary of smplx_3d_params 
+    transl, rotvec, shape, expression = smplx_3d_params['transl'], smplx_3d_params['rotvec'], smplx_3d_params['shape'], smplx_3d_params['expression']
+
+    # N == self.n_imgs
+    # transl: (3), rotvec: (53, 3), shape: (10), expression: (10)
+    # human_bbox: (N, 4), human_j2d: (N, 128, 2), human_det_score: (N,)
+    # divice rotvec to global rotation and relative rotation
+    global_rotvec = rotvec[0:1, :] 
+    relative_rotvec = rotvec[1:, :]
+
+    # initialize transl, rotvec, shape, expression as network parameters that have gradients
+    # Currently, just single person - Hongsuk
+    self.human_transl.data[:] = torch.from_numpy(transl).unsqueeze(0).to(self.device) # (1, 3)
+    self.human_global_rotvec.data[:] = torch.from_numpy(global_rotvec).unsqueeze(0).to(self.device) # (1, 1, 3)
+    self.human_relative_rotvec.data[:] = torch.from_numpy(relative_rotvec).unsqueeze(0).to(self.device) # (1, 52, 3)
+    self.human_shape.data[:] = torch.from_numpy(shape).unsqueeze(0).to(self.device) # (1, 10)
+    self.human_expression.data[:] = torch.from_numpy(expression).unsqueeze(0).to(self.device) # (1, 10)
+
+    # first extract data from the list of smplx_2d_data
+    # initialize the smplx_2d_data as non network parameters that do nothave gradients using register_buffer
+    human_bbox = torch.stack([torch.from_numpy(smplx_2d_data['human_bbox']) for smplx_2d_data in smplx_2d_data_list])
+    human_j2d = torch.stack([torch.from_numpy(smplx_2d_data['human_j2d']) for smplx_2d_data in smplx_2d_data_list])
+    human_det_score = torch.stack([torch.from_numpy(smplx_2d_data['human_det_score']) for smplx_2d_data in smplx_2d_data_list])
+    
+    self.register_buffer('human_bbox', human_bbox.to(self.device)) # (N, 4), human bbox xywh
+    self.register_buffer('human_j2d', human_j2d.to(self.device)) # (N, 22, 2), human 2D joints
+    self.register_buffer('human_det_score', human_det_score.to(self.device)) # (N,) human detection score
+
+    # precompute each view's weight for the human loss
+    human_bbox_area = human_bbox[:, 2] * human_bbox[:, 3]
+    normalized_human_bbox_area = human_bbox_area / human_bbox_area.sum()
+    human_weight = human_det_score / normalized_human_bbox_area
+
+    # register buffer for the weights
+    self.register_buffer('human_weight', human_weight.to(self.device))
+    print("human_weight: ", human_weight)
 
 def init_from_pts3d(self, pts3d, im_focals, im_poses):
     # init poses
@@ -102,6 +142,8 @@ def init_from_pts3d(self, pts3d, im_focals, im_poses):
 
     # take into account the scale normalization
     s_factor = self.get_pw_norm_scale_factor()
+    print("PW norm scale factor: ", s_factor)
+
     im_poses[:, :3, 3] *= s_factor  # apply downscaling factor
     for img_pts3d in pts3d:
         img_pts3d *= s_factor
@@ -117,7 +159,8 @@ def init_from_pts3d(self, pts3d, im_focals, im_poses):
                 self._set_focal(i, im_focals[i])
 
     if self.verbose:
-        print(' init loss =', float(self()))
+        # print(' init loss =', float(self()))
+        print(' init loss =', float(self()[0]), 'init human_loss =', float(self()[1]))
 
 
 def minimum_spanning_tree(imshapes, edges, pred_i, pred_j, conf_i, conf_j, im_conf, min_conf_thr,

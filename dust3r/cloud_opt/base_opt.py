@@ -173,6 +173,7 @@ class BasePCOptimizer (nn.Module):
         if scale is not None:
             assert poses.shape[-1] in (8, 13)
             pose.data[-1] = np.log(float(scale))
+
         return pose
 
     def get_pw_norm_scale_factor(self):
@@ -273,7 +274,7 @@ class BasePCOptimizer (nn.Module):
         return loss
 
     @torch.cuda.amp.autocast(enabled=False)
-    def compute_global_alignment(self, init=None, niter_PnP=10, **kw):
+    def compute_global_alignment(self, init=None, niter_PnP=10, pts3d=None, im_focals=None, im_poses=None, smplx_3d_params=None, smplx_2d_data=None, **kw):
         if init is None:
             pass
         elif init == 'msp' or init == 'mst':
@@ -281,8 +282,17 @@ class BasePCOptimizer (nn.Module):
         elif init == 'known_poses':
             init_fun.init_from_known_poses(self, min_conf_thr=self.min_conf_thr,
                                            niter_PnP=niter_PnP)
+        elif init == 'known_pts3d':
+            init_fun.init_from_pts3d(self, pts3d, im_focals, im_poses)
+        elif init == 'known_pts3d_and_smplx':
+            init_fun.init_from_pts3d_and_smplx(self, pts3d, im_focals, im_poses, smplx_3d_params, smplx_2d_data)
+            print("New init human transl: ", self.human_transl)
         else:
             raise ValueError(f'bad value for {init=}')
+
+        # TEMP Hongsuk
+        print("New init im_focals: ", self.im_focals)
+        print("New init im_poses: ", self.im_poses)
 
         return global_alignment_loop(self, **kw)
 
@@ -323,7 +333,7 @@ class BasePCOptimizer (nn.Module):
         return viz
 
 
-def global_alignment_loop(net, lr=0.01, niter=300, schedule='cosine', lr_min=1e-6):
+def global_alignment_loop(net, lr=0.01, niter=300, schedule='cosine', lr_min=1e-6, vis_2d_joints=True):
     params = [p for p in net.parameters() if p.requires_grad]
     if not params:
         return net
@@ -340,12 +350,16 @@ def global_alignment_loop(net, lr=0.01, niter=300, schedule='cosine', lr_min=1e-
     if verbose:
         with tqdm.tqdm(total=niter) as bar:
             while bar.n < bar.total:
-                loss, lr = global_alignment_iter(net, bar.n, niter, lr_base, lr_min, optimizer, schedule)
-                bar.set_postfix_str(f'{lr=:g} loss={loss:g}')
+                loss, _, human_loss = global_alignment_iter(net, bar.n, niter, lr_base, lr_min, optimizer, schedule)
+                bar.set_postfix_str(f'{lr=:g} loss={loss:g} human_loss={human_loss:g}')
                 bar.update()
+
+                if vis_2d_joints and bar.n % 10 == 0:
+                    net.save_2d_joints()
+
     else:
         for n in range(niter):
-            loss, _ = global_alignment_iter(net, n, niter, lr_base, lr_min, optimizer, schedule)
+            loss, _, human_loss = global_alignment_iter(net, n, niter, lr_base, lr_min, optimizer, schedule)
     return loss
 
 
@@ -359,11 +373,11 @@ def global_alignment_iter(net, cur_iter, niter, lr_base, lr_min, optimizer, sche
         raise ValueError(f'bad lr {schedule=}')
     adjust_learning_rate_by_lr(optimizer, lr)
     optimizer.zero_grad()
-    loss = net()
+    loss, human_loss = net() # human_loss is for logging, already float
     loss.backward()
     optimizer.step()
 
-    return float(loss), lr
+    return float(loss), lr, human_loss
 
 
 @torch.no_grad()

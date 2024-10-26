@@ -1,0 +1,16 @@
+outdir: "/tmp/monst3r"
+device: "cuda"
+silent: false
+image_size: 512
+filelist: []
+schedule: "linear"
+niter: 300
+min_conf_thr: 2.0
+as_pointcloud: false
+mask_sky: false
+clean_depth: true
+transparent_cams: false
+cam_size: 0.2
+scenegraph_type: "complete"
+winsize: 1
+refid: 0
