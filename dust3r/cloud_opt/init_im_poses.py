@@ -111,6 +111,8 @@ def init_from_smplx(self, smplx_3d_params, smplx_2d_data_list):
     # precompute each view's weight for the human loss
     human_bbox_area = human_bbox[:, 2] * human_bbox[:, 3]
     normalized_human_bbox_area = human_bbox_area / human_bbox_area.sum()
+    # TEMP: just average
+    normalized_human_bbox_area = normalized_human_bbox_area.mean()
     human_weight = human_det_score / normalized_human_bbox_area
 
     # register buffer for the weights
@@ -160,7 +162,10 @@ def init_from_pts3d(self, pts3d, im_focals, im_poses):
 
     if self.verbose:
         # print(' init loss =', float(self()))
-        print(' init loss =', float(self()[0]), 'init human_loss =', float(self()[1]))
+        if self.has_human_cue:
+            print(' init loss =', float(self()[0]), 'init human_loss =', float(self()[1]))
+        else:
+            print(' init loss =', float(self()[0]))
 
 
 def minimum_spanning_tree(imshapes, edges, pred_i, pred_j, conf_i, conf_j, im_conf, min_conf_thr,

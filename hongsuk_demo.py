@@ -67,7 +67,7 @@ def preprocess_and_get_transform(file, size=512, square_ok=False):
     return img_cropped, affine_matrix
 
 
-def global_alignment_optimization(scene, device, silent, niter, schedule, lr=0.01, init='mst', pts3d=None, im_focals=None, im_poses=None, smplx_3d_params=None, smplx_2d_data=None):
+def global_alignment_optimization(scene, device, silent, niter, schedule, lr=0.01, init='mst', pts3d=None, im_focals=None, im_poses=None, smplx_3d_params=None, smplx_2d_data=None, output_dir=None):
     lr = 0.01
     if init == 'mst':
         loss = scene.compute_global_alignment(init=init, niter=niter, schedule=schedule, lr=lr)
@@ -77,7 +77,7 @@ def global_alignment_optimization(scene, device, silent, niter, schedule, lr=0.0
     elif init == 'known_pts3d_and_smplx':
         scene.norm_pw_scale = False
         loss = scene.compute_global_alignment(init=init, niter=niter, schedule=schedule, lr=lr, pts3d=pts3d, im_focals=im_focals, im_poses=im_poses,
-                                            smplx_3d_params=smplx_3d_params, smplx_2d_data=smplx_2d_data)   
+                                            smplx_3d_params=smplx_3d_params, smplx_2d_data=smplx_2d_data, output_dir=output_dir)   
     print('final loss: ', loss)
 
     # get optimized values from scene
@@ -96,7 +96,7 @@ def global_alignment_optimization(scene, device, silent, niter, schedule, lr=0.0
 
 def get_reconstructed_scene(outdir, device, silent, image_size, filelist, schedule, niter, min_conf_thr,
                             as_pointcloud, mask_sky, clean_depth, transparent_cams, cam_size,
-                            scenegraph_type, winsize, refid, run_inference=True, loaded_optimized_output=None, model=None):
+                            scenegraph_type, winsize, refid, run_inference=True, loaded_optimized_output=None, model=None, output_dir=None):
     """
     from a list of images, run dust3r inference, global aligner.
     then run get_3D_model_from_scene
@@ -129,9 +129,8 @@ def get_reconstructed_scene(outdir, device, silent, image_size, filelist, schedu
         
         # Do the optimization
         scene, intrinsics, cams2world, pts3d, depths, msk, confs = global_alignment_optimization(scene, device, silent, niter, schedule, lr=0.01, init='mst')
-        print("After optimization, im_focals: ", scene.im_focals)
-        print("After optimization, im_poses: ", scene.im_poses)
-        print("After optimization, human_transl: ", scene.human_transl)
+        # print("After optimization, im_focals: ", scene.im_focals)
+        # print("After optimization, im_poses: ", scene.im_poses)
 
     else:
         if loaded_optimized_output is None:
@@ -141,7 +140,7 @@ def get_reconstructed_scene(outdir, device, silent, image_size, filelist, schedu
 
             # Select an optimizer
             mode = GlobalAlignerMode.PointCloudOptimizer if len(filelist) > 2 else GlobalAlignerMode.PairViewer
-            scene = global_aligner(output, device=device, mode=mode, verbose=not silent)
+            scene = global_aligner(output, device=device, mode=mode, verbose=not silent, has_human_cue=True)
 
             # load the precomputed 3D points, camera poses, and intrinsics, and the human data
             pts3d = []
@@ -174,10 +173,10 @@ def get_reconstructed_scene(outdir, device, silent, image_size, filelist, schedu
             scene, intrinsics, cams2world, pts3d, depths, msk, confs = \
                 global_alignment_optimization(scene, device, silent, niter, schedule, lr=0.01, init='known_pts3d_and_smplx', \
                                             pts3d=pts3d, im_focals=unnormalized_im_focals, im_poses=im_poses_4by4,
-                                            smplx_3d_params=smplx_3d_params, smplx_2d_data=smplx_2d_data)
-            print("After optimization, im_focals: ", scene.im_focals)
-            print("After optimization, im_poses: ", scene.im_poses)
-            print("After optimization, human_transl: ", scene.human_transl)
+                                            smplx_3d_params=smplx_3d_params, smplx_2d_data=smplx_2d_data, output_dir=output_dir)
+            # print("After optimization, human_transl: ", scene.human_transl)
+            # print("After optimization, smplx_params: ", scene.get_smplx_params())
+
 
     intrinsics = to_numpy(intrinsics)
     cams2world = to_numpy(cams2world)
@@ -191,7 +190,7 @@ def get_reconstructed_scene(outdir, device, silent, image_size, filelist, schedu
     return output, rgbimg, intrinsics, cams2world, pts3d, depths, msk, confs, affine_matrix_list, smplx_params
 
 
-def main(config_yaml: str = 'dust3r_config.yaml', model_path: str = '/home/hongsuk/projects/SimpleCode/multiview_world/checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth', out_dir: str = './outputs', img_dir: str = './images'):
+def main(run_dust3r: bool = False, config_yaml: str = 'dust3r_config.yaml', model_path: str = '/home/hongsuk/projects/SimpleCode/multiview_world/checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth', out_dir: str = './outputs', img_dir: str = './images'):
     # Get the config
     config = get_dust3r_config(config_yaml)
     if 'monst3r' in model_path.lower(): 
@@ -201,7 +200,7 @@ def main(config_yaml: str = 'dust3r_config.yaml', model_path: str = '/home/hongs
 
     # Add any custom arguments here
     custom_args = {
-        'run_inference': False,
+        'run_inference': run_dust3r,
         'loaded_optimized_output': None
     }
     if img_dir.endswith('/'):
@@ -209,15 +208,14 @@ def main(config_yaml: str = 'dust3r_config.yaml', model_path: str = '/home/hongs
     out_dir = osp.join(out_dir, osp.basename(img_dir))
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     model_name = osp.basename(model_path).split('_')[0].lower()
-    if custom_args['run_inference']:
+    if run_dust3r:
         # Load your model here
         from dust3r.model import AsymmetricCroCo3DStereo
         model = AsymmetricCroCo3DStereo.from_pretrained(model_path).to(config.device)
         output_file = osp.join(out_dir, f'{model_name}_reconstruction_results_{osp.basename(img_dir)}.pkl')
     else:
         model = None
-        # input_file = osp.join(out_dir, f'{model_name}_reconstruction_results_{osp.basename(img_dir)}.pkl')
-        input_file = '/home/hongsuk/projects/dust3r/outputs/egoexo/rescaled_dust3r_reconstruction_results_egoexo_with_multihmr_aligned.pkl'
+        input_file = f'/home/hongsuk/projects/dust3r/outputs/{osp.basename(img_dir)}/rescaled_dust3r_reconstruction_results_{osp.basename(img_dir)}_with_multihmr_aligned.pkl'
         with open(input_file, 'rb') as f:
             optimized_output = pickle.load(f)
         print(f"Loaded optimized output from {input_file}")
@@ -225,7 +223,7 @@ def main(config_yaml: str = 'dust3r_config.yaml', model_path: str = '/home/hongs
         output_file = osp.join(out_dir, f'{model_name}_reconstruction_results_reoptimized_{osp.basename(img_dir)}.pkl')
         print(f"Reoptimized output will be saved to {output_file}")
     custom_args['model'] = model
-
+    custom_args['output_dir'] = out_dir
 
     # Create a lambda function to wrap get_reconstructed_scene
     get_reconstructed_scene_lambda = lambda *args, **kwargs: get_reconstructed_scene(*args, **kwargs)
@@ -259,27 +257,28 @@ def main(config_yaml: str = 'dust3r_config.yaml', model_path: str = '/home/hongs
 
     print(f"Results saved to {output_file}")
 
-    # show_env_in_viser(output_file, world_scale_factor=5.)
+    if not run_dust3r:
+        # get vertices and faces from smplx_params
+        smplx_layer = SMPL_Layer(type='smplx', gender='neutral', num_betas=10, kid=False, person_center='head')
+        # set the device of smplx_layer to the same device as smplx_params
+        smplx_layer = smplx_layer.to(smplx_params['transl'].device)
+        pose = torch.cat((smplx_params['global_rotvec'], smplx_params['relative_rotvec']), dim=1) # (1, 53, 3)
+        smplx_output = smplx_layer(transl=smplx_params['transl'],
+                                pose=pose,
+                                shape=smplx_params['shape'],
+                                K=torch.zeros((len(pose), 3, 3), device=pose.device),  # dummy
+                                expression=smplx_params['expression'],
+                                loc=None,
+                                dist=None)
+        smplx_vertices = smplx_output['v3d']
+        smplx_vertices_world = {
+            'world': smplx_vertices.detach().squeeze().cpu().numpy()
+        }
+        smplx_faces = smplx_layer.bm_x.faces
 
-    # get vertices and faces from smplx_params
-    smplx_layer = SMPL_Layer(type='smplx', gender='neutral', num_betas=10, kid=False, person_center='head')
-    # set the device of smplx_layer to the same device as smplx_params
-    smplx_layer = smplx_layer.to(smplx_params['transl'].device)
-    pose = torch.cat((smplx_params['global_rotvec'], smplx_params['relative_rotvec']), dim=1) # (1, 53, 3)
-    smplx_output = smplx_layer(transl=smplx_params['transl'],
-                            pose=pose,
-                            shape=smplx_params['shape'],
-                            K=torch.zeros((len(pose), 3, 3), device=pose.device),  # dummy
-                            expression=smplx_params['expression'],
-                            loc=None,
-                            dist=None)
-    smplx_vertices = smplx_output['v3d']
-    smplx_vertices_world = {
-        'world': smplx_vertices.detach().squeeze().cpu().numpy()
-    }
-    smplx_faces = smplx_layer.bm_x.faces
-
-    show_env_human_in_viser(output_file, world_scale_factor=1., smplx_vertices_dict=smplx_vertices_world, smplx_faces=smplx_faces)
+        show_env_human_in_viser(output_file, world_scale_factor=1., smplx_vertices_dict=smplx_vertices_world, smplx_faces=smplx_faces)
+    else:
+        show_env_in_viser(output_file, world_scale_factor=5.)
 
 if __name__ == '__main__':
     tyro.cli(main)

@@ -274,7 +274,7 @@ class BasePCOptimizer (nn.Module):
         return loss
 
     @torch.cuda.amp.autocast(enabled=False)
-    def compute_global_alignment(self, init=None, niter_PnP=10, pts3d=None, im_focals=None, im_poses=None, smplx_3d_params=None, smplx_2d_data=None, **kw):
+    def compute_global_alignment(self, init=None, niter_PnP=10, pts3d=None, im_focals=None, im_poses=None, smplx_3d_params=None, smplx_2d_data=None, output_dir=None, **kw):
         if init is None:
             pass
         elif init == 'msp' or init == 'mst':
@@ -286,15 +286,15 @@ class BasePCOptimizer (nn.Module):
             init_fun.init_from_pts3d(self, pts3d, im_focals, im_poses)
         elif init == 'known_pts3d_and_smplx':
             init_fun.init_from_pts3d_and_smplx(self, pts3d, im_focals, im_poses, smplx_3d_params, smplx_2d_data)
-            print("New init human transl: ", self.human_transl)
+            # print("New init human smplx_params: ", self.get_smplx_params())
         else:
             raise ValueError(f'bad value for {init=}')
 
         # TEMP Hongsuk
-        print("New init im_focals: ", self.im_focals)
-        print("New init im_poses: ", self.im_poses)
+        # print("New init im_focals: ", self.im_focals)
+        # print("New init im_poses: ", self.im_poses)
 
-        return global_alignment_loop(self, **kw)
+        return global_alignment_loop(self, output_dir=output_dir, **kw)
 
     @torch.no_grad()
     def mask_sky(self):
@@ -333,7 +333,7 @@ class BasePCOptimizer (nn.Module):
         return viz
 
 
-def global_alignment_loop(net, lr=0.01, niter=300, schedule='cosine', lr_min=1e-6, vis_2d_joints=True):
+def global_alignment_loop(net, lr=0.01, niter=300, schedule='cosine', lr_min=1e-6, vis_2d_joints=True, output_dir=None):
     params = [p for p in net.parameters() if p.requires_grad]
     if not params:
         return net
@@ -355,7 +355,7 @@ def global_alignment_loop(net, lr=0.01, niter=300, schedule='cosine', lr_min=1e-
                 bar.update()
 
                 if vis_2d_joints and bar.n % 10 == 0:
-                    net.save_2d_joints()
+                    net.save_2d_joints(output_dir=output_dir)
 
     else:
         for n in range(niter):
@@ -376,6 +376,9 @@ def global_alignment_iter(net, cur_iter, niter, lr_base, lr_min, optimizer, sche
     loss, human_loss = net() # human_loss is for logging, already float
     loss.backward()
     optimizer.step()
+
+    if human_loss is None:
+        human_loss = 0
 
     return float(loss), lr, human_loss
 

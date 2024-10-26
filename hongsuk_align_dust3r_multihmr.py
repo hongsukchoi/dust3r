@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import cv2
 import os
 import pickle
+import tyro
+
 from pathlib import Path
 from scipy.spatial.transform import Rotation as R
 
@@ -32,15 +34,25 @@ def read_multihmr_outputs(multihmr_pkl):
     # filter out humans and just keep the main person
     main_human_dict = {}
     for img_idx, (img_name, humans) in enumerate(multihmr_humans_dict.items()):
+        # egoexo
+        # if 'cam01' in img_name:
+        #     main_human = humans[0]
+        # elif 'cam02' in img_name:
+        #     main_human = humans[1]
+        # elif 'cam03' in img_name:
+        #     main_human = humans[4]
+        # elif 'cam04' in img_name:
+        #     main_human = humans[0]
+        # indiana_bike_06_2
         if 'cam01' in img_name:
-            main_human = humans[0]
+            main_human = humans[1]
         elif 'cam02' in img_name:
             main_human = humans[1]
         elif 'cam03' in img_name:
-            main_human = humans[4]
+            main_human = humans[0]
         elif 'cam04' in img_name:
             main_human = humans[0]
-        
+
         main_human_dict[img_name] = main_human
 
     # new dictionary only with the main human, key is the img_name
@@ -298,18 +310,25 @@ def decode_smplx_mesh(multihmr_data, dust3r_data, output_dir=None, vis_2d=True):
     return smplx_vertices_dict, smplx_layer
 
 
-def main():
-    multihmr_pkl = '/home/hongsuk/projects/dust3r/outputs/egoexo/multihmr_data_egoexo.pkl'
-    dust3r_output_path = '/home/hongsuk/projects/dust3r/outputs/egoexo/dust3r_reconstruction_results_egoexo.pkl'
-    output_dir = '/home/hongsuk/projects/dust3r/outputs/egoexo/aligned_2d_outputs'
+def main(output_dir: str = './outputs/egoexo'):
+    scene_name = os.path.basename(output_dir)
+    multihmr_pkl = Path(output_dir) / f'multihmr_data_{scene_name}.pkl' # '/home/hongsuk/projects/dust3r/outputs/egoexo/multihmr_data_egoexo.pkl'
+    dust3r_output_path = Path(output_dir) / f'dust3r_reconstruction_results_{scene_name}.pkl' #'/home/hongsuk/projects/dust3r/outputs/egoexo/dust3r_reconstruction_results_egoexo.pkl'
+    output_dir = Path(output_dir) / f'aligned_2d_outputs' #'/home/hongsuk/projects/dust3r/outputs/egoexo/aligned_2d_outputs'
 
     Path(output_dir).mkdir(parents=True, exist_ok=True) 
 
+    print(f"Reading multihmr data from {multihmr_pkl}")
     multihmr_data = read_multihmr_outputs(multihmr_pkl)
+    print(f"Reading dust3r data from {dust3r_output_path}")
     dust3r_data = read_dust3r_outputs(dust3r_output_path)
+    print(f"Aligning multihmr 2d outputs to dust3r 2d outputs")
     multihmr_2d_outputs_in_dust3r = align_multihmr_2d_outputs_to_dust3r_2d(multihmr_data, dust3r_data, output_dir, vis=True)
+    print(f"Getting multihmr dust3r scale ratio")
     scale_ratio, conf = get_multihmr_dust3r_scale_ratio(multihmr_2d_outputs_in_dust3r, multihmr_data, dust3r_data, only_main_joints=True, k=10)
+    print(f"Scaling dust3r outputs")
     scale_dust3r_outputs(dust3r_data, scale_ratio) # in-place scaling
+    print(f"Transforming multihmr outputs to dust3r world coordinate frame")
     transform_multihmr_outputs_to_dust3r_world(multihmr_data, dust3r_data) # in-place transformation
 
     # save the multihmr data with the scale ratio in the dust3r data
@@ -335,5 +354,5 @@ def main():
         show_env_human_in_viser(dust3r_output_path, world_scale_factor=scale_ratio, smplx_vertices_dict=smplx_vertices_dict, smplx_faces=smplx_layer.bm_x.faces)
 
 if __name__ == '__main__':
-    main()
+    tyro.cli(main)
 

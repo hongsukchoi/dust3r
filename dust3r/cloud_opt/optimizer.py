@@ -24,14 +24,14 @@ class PointCloudOptimizer(BasePCOptimizer):
     Graph edges: observations = (pred1, pred2)
     """
 
-    def __init__(self, *args, optimize_pp=False, focal_break=20, **kwargs):
+    def __init__(self, *args, has_human_cue=False, optimize_pp=False, focal_break=20, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.has_im_poses = True  # by definition of this class
         self.focal_break = focal_break
 
         # Hongsuk added
-        self.has_human_cue = True
+        self.has_human_cue = has_human_cue
         self.human_loss_weight = 15.0
         self.smplx_layer = SMPL_Layer(type='smplx', gender='neutral', num_betas=10, kid=False, person_center='head')
 
@@ -242,7 +242,7 @@ class PointCloudOptimizer(BasePCOptimizer):
 
         return smplx_output
     
-    def save_2d_joints(self):
+    def save_2d_joints(self, output_dir=''):
         smplx_output = self.get_smplx_output()
         smplx_j3d = smplx_output['j3d'][:, :get_smplx_joint_names().index('jaw')] # (1, J, 3)
         smplx_j3d = smplx_j3d.repeat(self.n_imgs, 1, 1) # (self.n_imgs, J, 3)
@@ -261,7 +261,7 @@ class PointCloudOptimizer(BasePCOptimizer):
             for joint in smplx_j2d[img_idx]:
                 img = cv2.circle(img, (int(joint[0]), int(joint[1])), 3, (0, 255, 0), -1) 
 
-            tmp_output_path = osp.join('/home/hongsuk/projects/dust3r/outputs/egoexo/optimized_2d_joints', f'{img_idx}.png')
+            tmp_output_path = osp.join(output_dir, f'{img_idx}.png')
             cv2.imwrite(tmp_output_path, img[...,::-1])
 
         return smplx_j2d

@@ -202,7 +202,6 @@ def main(img_folder: str, model_path: str = '/home/hongsuk/projects/SimpleCode/m
 
     # Loading
     model = load_model(model_path)
-    import pdb; pdb.set_trace()
 
     # All images
     humans_dict = {}
@@ -237,8 +236,6 @@ def main(img_folder: str, model_path: str = '/home/hongsuk/projects/SimpleCode/m
             
             # Save bounding box to the human dictionary
             human['bbox'] = bbox
-
-
 
         if render:
             # Superimpose predicted human meshes to the input image.

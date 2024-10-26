@@ -1,3 +1,43 @@
+# Quick Commands
+
+Step 1. Run DUSt3R inference on your images and your cameras and pointclouds.
+
+```bash
+python hongsuk_demo.py --img-dir ./inputs/indiana_bike_06_2 --run-dust3r
+```
+
+Step 2. Run multihmr inference on your images.
+
+```bash
+python hongsuk_get_multihmr_outputs.py --img-folder ./inputs/indiana_bike_06_2
+```
+
+Step 3. Align multihmr 2d outputs to dust3r 2d outputs (scale dust3r and transform multihmr).
+
+```bash
+python hongsuk_align_dust3r_multihmr.py --output-dir ./outputs/indiana_bike_06_2
+```
+
+Step 4. Jointly optimize dust3r camera poses, pointclouds, and multihmr 3d outputs (a single human)
+
+```bash
+python hongsuk_demo.py --img-dir ./inputs/indiana_bike_06_2
+```
+
+# Full pipeline
+Step 1. Run DUSt3R inference on your images.
+
+
+Step 2. Run multihmr inference on your images.
+
+
+Step 3. Align multihmr and dust3r 2d outputs: scale dust3r camera poses + pointclouds and transform camera-frame multihmr to dust3r world-frame.
+
+
+Step 4. Jointly optimize dust3r camera poses, pointclouds, and multihmr 3d outputs (a single human)
+
+
+
 ![demo](assets/dust3r.jpg)
 
 Official implementation of `DUSt3R: Geometric 3D Vision Made Easy`  
