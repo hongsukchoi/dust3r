@@ -50,9 +50,9 @@ def main(net_pred_file: str, resume_file: str = None):
     device = 'cuda'
     silent = False
     schedule = 'linear'
-    niter = 290
+    niter = 300
     lr = 0.01
-    lr_base = 0.01
+    lr_base = lr
     lr_min = 0.0001
     init = 'mst'
     has_human_cue = False
@@ -78,36 +78,38 @@ def main(net_pred_file: str, resume_file: str = None):
     # run the global alignment
     # define the scene, which is actually a neural network that has learnable parameters which are the scene parameters and to be optimized
     scene = global_aligner(output, device=device, mode=mode, verbose=not silent, has_human_cue=has_human_cue)
-    if norm_scale:
-        scene.norm_pw_scale = True
-    else:
-        scene.norm_pw_scale = False
 
-    # initialize the scene parameters with the known poses or point clouds
-    if init == 'mst':
-        scene.init_default_mst(niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
-        print("Default MST init")
-    elif init == 'known_params_hongsuk':
-        scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
-        print("Known params init")
-        
+    if len(img_names) > 2:
+        if norm_scale:
+            scene.norm_pw_scale = True
+        else:
+            scene.norm_pw_scale = False
 
-    # define the adam optimizer
-    params = [p for p in scene.parameters() if p.requires_grad]
-    optimizer = torch.optim.Adam(params, lr=lr, betas=(0.9, 0.9))
+        # initialize the scene parameters with the known poses or point clouds
+        if init == 'mst':
+            scene.init_default_mst(niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+            print("Default MST init")
+        elif init == 'known_params_hongsuk':
+            scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+            print("Known params init")
+            
 
-    # Given the number of iterations, run the optimizer while forwarding the scene with the current parameters to get the loss
-    with tqdm.tqdm(total=niter) as bar:
-        while bar.n < bar.total:
-            lr = adjust_lr(bar.n, niter, lr_base, lr_min, optimizer, schedule)
-            optimizer.zero_grad()
-            loss = scene.dust3r_loss()
-            loss.backward()
-            optimizer.step()
+        # define the adam optimizer
+        params = [p for p in scene.parameters() if p.requires_grad]
+        optimizer = torch.optim.Adam(params, lr=lr, betas=(0.9, 0.9))
 
-            bar.set_postfix_str(f'{lr=:g} loss={loss:g}')
-            bar.update()
-    print("final loss: ", loss)
+        # Given the number of iterations, run the optimizer while forwarding the scene with the current parameters to get the loss
+        with tqdm.tqdm(total=niter) as bar:
+            while bar.n < bar.total:
+                lr = adjust_lr(bar.n, niter, lr_base, lr_min, optimizer, schedule)
+                optimizer.zero_grad()
+                loss = scene.dust3r_loss()
+                loss.backward()
+                optimizer.step()
+
+                bar.set_postfix_str(f'{lr=:g} loss={loss:g}')
+                bar.update()
+        print("final loss: ", loss)
 
     # Get optimized values from scene
     pts3d = scene.get_pts3d()

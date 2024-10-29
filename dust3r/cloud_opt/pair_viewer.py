@@ -125,3 +125,5 @@ class PairViewer (BasePCOptimizer):
 
     def forward(self):
         return float('nan')
+
+    

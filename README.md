@@ -1,41 +1,39 @@
+
 # Quick Commands
 
-Step 1. Run DUSt3R inference on your images and your cameras and pointclouds.
+**DUSt3R commands** 
+
+Step 1. Run DUSt3R network inference on your images and save the outputs.
 
 ```bash
-python hongsuk_demo.py --img-dir ./inputs/indiana_bike_06_2 --run-dust3r
+python hongsuk_network_run_dust3r.py --img-dir ./inputs/basket
 ```
 
-Step 2. Run multihmr inference on your images.
+Step 2. Run DUSt3r global alignment to initalize the camera poses and pointclouds.
 
 ```bash
-python hongsuk_get_multihmr_outputs.py --img-folder ./inputs/indiana_bike_06_2
+python hongsuk_refactored_dust3r_ga.py --net-pred-file ./outputs/basket/dust3r_network_output_pointmaps_basket.pkl 
 ```
 
-Step 3. Align multihmr 2d outputs to dust3r 2d outputs (scale dust3r and transform multihmr).
+Step 3. After some update with human joint optimiation, 
+Resume the global alignment!
 
 ```bash
-python hongsuk_align_dust3r_multihmr.py --output-dir ./outputs/indiana_bike_06_2
+python hongsuk_refactored_dust3r_ga.py --net-pred-file ./outputs/basket/dust3r_network_output_pointmaps_basket.pkl --resume-file ./outputs/basket/dust3r_global_alignment_results_basket.pkl 
 ```
+**Others**
 
-Step 4. Jointly optimize dust3r camera poses, pointclouds, and multihmr 3d outputs (a single human)
+- Run MultiHMR inference on your images and save the outputs.
 
 ```bash
-python hongsuk_demo.py --img-dir ./inputs/indiana_bike_06_2
+python hongsuk_get_multihmr_outputs.py --img-folder ./inputs/basket
 ```
 
-# Full pipeline
-Step 1. Run DUSt3R inference on your images.
+- Align multihmr 2d outputs to dust3r 2d outputs (scale dust3r and transform multihmr).
 
-
-Step 2. Run multihmr inference on your images.
-
-
-Step 3. Align multihmr and dust3r 2d outputs: scale dust3r camera poses + pointclouds and transform camera-frame multihmr to dust3r world-frame.
-
-
-Step 4. Jointly optimize dust3r camera poses, pointclouds, and multihmr 3d outputs (a single human)
-
+```bash
+python hongsuk_align_dust3r_multihmr.py --output-dir ./outputs/basket
+```
 
 
 ![demo](assets/dust3r.jpg)
