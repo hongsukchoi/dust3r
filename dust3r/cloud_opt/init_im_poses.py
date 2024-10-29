@@ -19,6 +19,57 @@ from dust3r.viz import to_numpy
 
 from dust3r.cloud_opt.commons import edge_str, i_j_ij, compute_edge_scores
 
+
+@torch.no_grad()
+def init_from_known_poses_hongsuk(self, niter_PnP=10, min_conf_thr=3):
+    device = self.device
+
+    # indices of known poses
+    nkp, _, known_poses = get_known_poses(self)
+    # assert nkp == self.n_imgs, 'not all poses are known'
+
+    # get all focals
+    nkf, _, im_focals = get_known_focals(self)
+    # assert nkf == self.n_imgs
+    im_pp = self.get_principal_points()
+
+    best_depthmaps = {}
+    # init all pairwise poses
+    for e, (i, j) in enumerate(tqdm(self.edges, disable=not self.verbose)):
+        i_j = edge_str(i, j)
+
+        # find relative pose for this pair
+        P1 = torch.eye(4, device=device)
+        msk = self.conf_i[i_j] > min(min_conf_thr, self.conf_i[i_j].min() - 0.1)
+        _, P2 = fast_pnp(self.pred_j[i_j], float(im_focals[i].mean()),
+                         pp=im_pp[i], msk=msk, device=device, niter_PnP=niter_PnP)
+
+        # align the two predicted camera with the two gt cameras
+        s, R, T = align_multiple_poses(torch.stack((P1, P2)), known_poses[[i, j]])
+        # normally we have known_poses[i] ~= sRT_to_4x4(s,R,T,device) @ P1
+        # and geotrf(sRT_to_4x4(1,R,T,device), s*P2[:3,3])
+        self._set_pose(self.pw_poses, e, R, T, scale=s)
+
+        # # remember if this is a good depthmap
+        # score = float(self.conf_i[i_j].mean())
+        # if score > best_depthmaps.get(i, (0,))[0]:
+        #     best_depthmaps[i] = score, i_j, s
+
+    # # init all image poses
+    # for n in range(self.n_imgs):
+    #     # assert known_poses_msk[n]
+    #     _, i_j, scale = best_depthmaps[n]
+    #     depth = self.pred_i[i_j][:, :, 2]
+    #     self._set_depthmap(n, depth * scale)
+
+    if self.verbose:
+        # print(' init loss =', float(self()))
+        if self.has_human_cue:
+            print(' init loss =', float(self()[0]), 'init human_loss =', float(self()[1]))
+        else:
+            print(' init loss =', float(self()[0]))
+
+
 @torch.no_grad()
 def init_from_known_poses(self, niter_PnP=10, min_conf_thr=3):
     device = self.device
@@ -141,6 +192,7 @@ def init_from_pts3d(self, pts3d, im_focals, im_poses):
         # compute transform that goes from cam to world
         s, R, T = rigid_points_registration(self.pred_i[i_j], pts3d[i], conf=self.conf_i[i_j])
         self._set_pose(self.pw_poses, e, R, T, scale=s)
+        # print(e, self.pw_poses[e])
 
     # take into account the scale normalization
     s_factor = self.get_pw_norm_scale_factor()

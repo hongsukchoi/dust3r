@@ -17,6 +17,7 @@ def main(world_env_pkl: str, world_scale_factor: float = 5.):
 def show_env_in_viser(world_env_pkl: str, world_scale_factor: float = 5.):
     # Extract data from world_env dictionary
     # Load world environment data estimated by Mast3r
+    print(f"Loading world environment data from {world_env_pkl}")
     with open(world_env_pkl, 'rb') as f:
         world_env = pickle.load(f)
 

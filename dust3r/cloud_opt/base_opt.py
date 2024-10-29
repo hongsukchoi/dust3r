@@ -282,6 +282,9 @@ class BasePCOptimizer (nn.Module):
         elif init == 'known_poses':
             init_fun.init_from_known_poses(self, min_conf_thr=self.min_conf_thr,
                                            niter_PnP=niter_PnP)
+        elif init == 'known_poses_hongsuk':
+            init_fun.init_from_known_poses_hongsuk(self, min_conf_thr=self.min_conf_thr,
+                                           niter_PnP=niter_PnP)
         elif init == 'known_pts3d':
             init_fun.init_from_pts3d(self, pts3d, im_focals, im_poses)
         elif init == 'known_pts3d_and_smplx':
@@ -354,7 +357,7 @@ def global_alignment_loop(net, lr=0.01, niter=300, schedule='cosine', lr_min=1e-
                 bar.set_postfix_str(f'{lr=:g} loss={loss:g} human_loss={human_loss:g}')
                 bar.update()
 
-                if vis_2d_joints and bar.n % 10 == 0:
+                if net.has_human_cue and vis_2d_joints and bar.n % 10 == 0:
                     net.save_2d_joints(output_dir=output_dir)
 
     else:
