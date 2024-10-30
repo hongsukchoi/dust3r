@@ -21,6 +21,7 @@ Resume the global alignment!
 ```bash
 python hongsuk_refactored_dust3r_ga.py --net-pred-file ./outputs/basket/dust3r_network_output_pointmaps_basket.pkl --resume-file ./outputs/basket/dust3r_global_alignment_results_basket.pkl 
 ```
+
 **Others**
 
 - Run MultiHMR inference on your images and save the outputs.
