@@ -225,6 +225,22 @@ class EgoHumansDataset(Dataset):
             world_multiple_human_3d_annot[human_name] = sample['world_data'][human_name]
 
         # Load all required data
+        # Data dictionary contains:
+        # - multiview_images: Dict[camera_name -> Dict] containing preprocessed images for DUSt3R
+        #     - img: preprocessed image torch tensor; shape (3, 288, 512)
+        #     - true_shape: original image dimensions, which is (288,512); shape (2, )
+        # - multiview_affine_transforms: Dict[camera_name -> np.ndarray] containing affine matrices, np array shape (2, 3)
+        #     mapping from cropped to original image coordinates
+        # - multiview_multiple_human_2d_cam_annot: Dict[camera_name -> Dict[human_name -> Dict]] containing 2D annotations
+        #     - pose2d: 2D keypoint coordinates, np array shape (133, 2+1), x, y, confidence
+        #     - bbox: Bounding box coordinates, np array shape (4+1, ), x, y, w, h, confidence
+
+        # - world_multiple_human_3d_annot: Dict[human_name -> Dict] containing 3D world smplx parameters, this is for evaluation, you can put GT 3D joints here instead
+        # - camera_parameters: Dict[camera_name -> Dict] containing camera parameters
+
+        # - sequence: Sequence name/ID
+        # - frame: Frame number
+        import pdb; pdb.set_trace()
         data = {
             'multiview_images': multiview_images,
             'multiview_affine_transforms': multiview_affine_transforms,
@@ -307,7 +323,7 @@ def create_dataloader(data_root, batch_size=8, split='train', num_workers=4, sub
 
 if __name__ == '__main__':
     data_root = '/home/hongsuk/projects/egohumans/data'
-    dataloader = create_dataloader(data_root, batch_size=1, split='test', num_workers=4)
+    dataloader = create_dataloader(data_root, batch_size=1, split='test', num_workers=0)
     for data in dataloader:
         print(data.keys())
         import pdb; pdb.set_trace()
