@@ -14,13 +14,13 @@ from scipy.spatial.transform import Rotation as R
 def main(world_env_pkl: str, world_scale_factor: float = 5.):
     show_env_in_viser(world_env_pkl, world_scale_factor)
 
-def show_env_in_viser(world_env_pkl: str, world_scale_factor: float = 5.):
-    # Extract data from world_env dictionary
-    # Load world environment data estimated by Mast3r
-    print(f"Loading world environment data from {world_env_pkl}")
-    with open(world_env_pkl, 'rb') as f:
-        world_env = pickle.load(f)
-
+def show_env_in_viser(world_env_pkl: str = '', world_env: dict = None, world_scale_factor: float = 5.):
+    if world_env is None:
+        # Extract data from world_env dictionary
+        # Load world environment data estimated by Mast3r
+        print(f"Loading world environment data from {world_env_pkl}")
+        with open(world_env_pkl, 'rb') as f:
+            world_env = pickle.load(f)
 
     for img_name in world_env.keys():
         if img_name == 'non_img_specific':

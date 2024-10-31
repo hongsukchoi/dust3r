@@ -29,8 +29,8 @@ class PointCloudOptimizer(BasePCOptimizer):
         self.has_im_poses = True  # by definition of this class
         self.focal_break = focal_break
 
-        # # Hongsuk added
-        # self.has_human_cue = has_human_cue
+        # Hongsuk added
+        self.has_human_cue = has_human_cue
         # if self.has_human_cue:
         #     from multihmr.blocks import SMPL_Layer
         #     from multihmr.utils import get_smplx_joint_names

@@ -12,7 +12,7 @@ import pickle
 from dust3r.utils.image import load_images as dust3r_load_images
 
 class EgoHumansDataset(Dataset):
-    def __init__(self, data_root, split='train', subsample_rate=10, cam_names=None):
+    def __init__(self, data_root, dust3r_output_path=None, split='train', subsample_rate=10, cam_names=None):
         """
         Args:
             data_root (str): Root directory of the dataset
@@ -28,13 +28,24 @@ class EgoHumansDataset(Dataset):
             self.camera_names = ['cam01', 'cam02', 'cam03', 'cam04']
         else:
             self.camera_names = cam_names
-        # choose only one sequence for testing
-        self.selected_small_seq_name = ''  # ex) 001_tagging
+        # choose only a few sequence for testing else all sequences
+        self.selected_small_seq_name_list = []  # ex) ['001_tagging', '002_tagging']
+
+        # Load dust3r network output
+        self.dust3r_output_path = dust3r_output_path
+        if self.dust3r_output_path is not None:
+            self.dust3r_output = pickle.load(open(self.dust3r_output_path, 'rb'))
+            for output_name, output in self.dust3r_output.items():
+                # output_name is like '001_tagging_0_cam01cam02cam03cam04'
+                small_seq_name = '_'.join(output_name.split('_')[0:2])
+                camera_names = output_name.split('_')[-1]
+                assert ''.join(self.camera_names) == camera_names, f'Camera names in self.camera_names and dust3r output do not match: {self.camera_names} vs {camera_names}'
+                self.selected_small_seq_name_list.append(small_seq_name)
 
         # Load dataset metadata and create sample list
         self._load_annot_paths_and_cameras()
         self.datalist = self._load_dataset_info()
-        print(f'Successfully loaded {len(self.datalist)} multiviewsamples')
+        print(f'Successfully loaded {len(self.datalist)} multiview samples')
 
 
     def _load_annot_paths_and_cameras(self):
@@ -47,7 +58,7 @@ class EgoHumansDataset(Dataset):
             
             for small_seq in small_seq_list:
                 small_seq_name = os.path.basename(small_seq)
-                if self.selected_small_seq_name != '' and small_seq_name != self.selected_small_seq_name:
+                if self.selected_small_seq_name_list != [] and small_seq_name not in self.selected_small_seq_name_list:
                     continue
                 try:
                     with open(os.path.join(small_seq, 'parsed_annot_hongsuk.pkl'), 'rb') as f:
@@ -124,15 +135,20 @@ class EgoHumansDataset(Dataset):
                 # add world smpl params data
                 per_frame_data['world_data'] = annot['frame_data'][frame]['world_data'] # dictionrary of human names and their smpl params
 
-                # add camera data
-                per_frame_data['cameras'] = annot['cameras'] # dictionrary of camera names and their parameters
                 
                 # check whether the cameras.keys() are superset of the self.camera_names
                 # if not, skip this frame
-                selected_cameras = sorted([cam for cam in per_frame_data['cameras'].keys() if cam in self.camera_names ])
+                selected_cameras = sorted([cam for cam in annot['cameras'].keys() if cam in self.camera_names ])
                 if len(selected_cameras) != len(self.camera_names):
                     # print(f'Warning: {small_seq} does not have all the cameras in self.camera_names; skipping this frame')
                     continue
+
+                # check whether the dust3r is given and the dust3r output exists; this is fore global alignment step of Dust3r
+                if self.dust3r_output_path is not None and f'{small_seq}_{frame}_{"".join(selected_cameras)}' not in self.dust3r_output.keys():
+                    continue
+
+                # add camera data
+                per_frame_data['cameras'] = {cam: annot['cameras'][cam] for cam in selected_cameras} # dictionrary of camera names and their parameters
                 
                 # add 2d pose and bbox annot data
                 per_frame_data['annot_and_img_paths'] = {}
@@ -153,20 +169,39 @@ class EgoHumansDataset(Dataset):
                     # pose2d_annot = np.load(pose2d_annot_path, allow_pickle=True)
                     # bbox_annot = np.load(bbox_annot_path, allow_pickle=True)
 
-                per_frame_data_list.append(per_frame_data)
+                per_frame_data_list.append(per_frame_data)                
 
         return per_frame_data_list
     
     def __len__(self):
         return len(self.datalist)
-    
+
     def __getitem__(self, idx):
+        return self.get_single_item(idx)
+    
+    def get_single_item(self, idx):
         sample = self.datalist[idx]
         seq = sample['sequence']
         frame = sample['frame']
 
         # get camera parameters
-        cameras = self.cameras[seq] # include all cameras' extrinsics and intrinsics
+        cameras = sample['cameras'] 
+        # Align cameras to first camera frame
+        first_cam = list(cameras.keys())[0]
+        first_cam_R = cameras[first_cam]['cam2world_R'] 
+        first_cam_t = cameras[first_cam]['cam2world_t']
+        # Transform all cameras relative to first camera
+        for cam in cameras:
+            R = cameras[cam]['cam2world_R']
+            t = cameras[cam]['cam2world_t']
+            
+            # New rotation: R_new = R * R_first.T
+            cameras[cam]['cam2world_R'] = R @ first_cam_R.T
+            
+            # New translation: t_new = t - R_new * t_first
+            cameras[cam]['cam2world_t'] = t - (cameras[cam]['cam2world_R'] @ first_cam_t)
+
+
         # filter camera names that exist in both self.camera_names and cameras
         selected_cameras = sorted([cam for cam in cameras.keys() if cam in self.camera_names])
 
@@ -174,17 +209,25 @@ class EgoHumansDataset(Dataset):
         multiview_images = {}
         img_path_list = [sample['annot_and_img_paths'][cam]['img_path'] for cam in selected_cameras]
         dust3r_input_imgs = dust3r_load_images(img_path_list, size=self.dust3r_image_size, verbose=False)
-        # squeeze the batch dimension
+        # squeeze the batch dimension for 'img' and 'true_shape'
         new_dust3r_input_imgs = []
         for dust3r_input_img in dust3r_input_imgs:
             new_dust3r_input_img = {}
-            for key in ['img', 'true_shape']: # dict_keys(['img', 'true_shape', 'idx', 'instance'])
-                new_dust3r_input_img[key] = dust3r_input_img[key][0]    
+            for key in dust3r_input_img.keys(): # dict_keys(['img', 'true_shape', 'idx', 'instance'])
+                if key in ['img', 'true_shape']: #
+                    new_dust3r_input_img[key] = dust3r_input_img[key][0]
+                else:
+                    new_dust3r_input_img[key] = dust3r_input_img[key]
             new_dust3r_input_imgs.append(new_dust3r_input_img)
-
         multiview_images = {cam: new_dust3r_input_imgs[i] for i, cam in enumerate(selected_cameras)}
         multiview_affine_transforms = {cam: get_dust3r_affine_transform(img_path, size=self.dust3r_image_size) for cam, img_path in zip(selected_cameras, img_path_list)}
 
+        # get dust3r output
+        if self.dust3r_output_path is not None:
+            dust3r_network_output = self.dust3r_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['output']
+            del dust3r_network_output['loss']
+
+        # load 2d annot for human optimization later
         multiview_multiple_human_2d_cam_annot = {}
         for camera_name in selected_cameras:
             # Load image if it exists
@@ -240,15 +283,19 @@ class EgoHumansDataset(Dataset):
 
         # - sequence: Sequence name/ID
         # - frame: Frame number
-        import pdb; pdb.set_trace()
         data = {
             'multiview_images': multiview_images,
             'multiview_affine_transforms': multiview_affine_transforms,
             'multiview_multiple_human_2d_cam_annot': multiview_multiple_human_2d_cam_annot,
+            'multiview_cameras': cameras,
             'world_multiple_human_3d_annot': world_multiple_human_3d_annot,
             'sequence': seq,
             'frame': frame
         }
+
+        # add dust3r network output if it exists
+        if self.dust3r_output_path is not None:
+            data['dust3r_network_output'] = dust3r_network_output
 
         return data
 
@@ -290,7 +337,7 @@ def get_dust3r_affine_transform(file, size=512, square_ok=False):
 
 
 
-def create_dataloader(data_root, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None):
+def create_dataloader(data_root, dust3r_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None):
     """
     Create a dataloader for the multiview human dataset
     
@@ -305,6 +352,7 @@ def create_dataloader(data_root, batch_size=8, split='train', num_workers=4, sub
     """
     dataset = EgoHumansDataset(
         data_root=data_root,
+        dust3r_output_path=dust3r_output_path,
         split=split,
         subsample_rate=subsample_rate,
         cam_names=cam_names
@@ -318,12 +366,13 @@ def create_dataloader(data_root, batch_size=8, split='train', num_workers=4, sub
         pin_memory=True,
     )
     
-    return dataloader
+    return dataset, dataloader
 
 
 if __name__ == '__main__':
     data_root = '/home/hongsuk/projects/egohumans/data'
-    dataloader = create_dataloader(data_root, batch_size=1, split='test', num_workers=0)
+    dust3r_output_path = None # '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl'
+    dataloader = create_dataloader(data_root, dust3r_output_path=dust3r_output_path, batch_size=1, split='test', num_workers=0)
     for data in dataloader:
         print(data.keys())
         import pdb; pdb.set_trace()
