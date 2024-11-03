@@ -1,26 +1,36 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
+import scipy.spatial
+from scipy.optimize import linear_sum_assignment
 import os
 import json
 import cv2
 import glob
 import PIL
-from PIL import Image
+from PIL import Image, ImageOps
 import pickle
 
 from dust3r.utils.image import load_images as dust3r_load_images
+from multihmr.utils import normalize_rgb, get_focalLength_from_fieldOfView
+from multihmr.utils import get_smplx_joint_names
+
+from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, SMPLX_JOINT_NAMES
 
 class EgoHumansDataset(Dataset):
-    def __init__(self, data_root, dust3r_output_path=None, split='train', subsample_rate=10, cam_names=None):
+    def __init__(self, data_root, dust3r_output_path=None, dust3r_ga_output_path=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None):
         """
         Args:
             data_root (str): Root directory of the dataset
+            dust3r_output_path (str): Path to the dust3r output
+            dust3r_ga_output_path (str): Path to the dust3r global alignment output
+            multihmr_output_path (str): Path to the multihmr output
             split (str): 'train', 'val', or 'test'
         """
         self.data_root = data_root 
         self.split = split
         self.dust3r_image_size = 512
+        self.multihmr_image_size = 896
         self.subsample_rate = subsample_rate
 
         # choose camera names
@@ -41,6 +51,35 @@ class EgoHumansDataset(Dataset):
                 camera_names = output_name.split('_')[-1]
                 assert ''.join(self.camera_names) == camera_names, f'Camera names in self.camera_names and dust3r output do not match: {self.camera_names} vs {camera_names}'
                 self.selected_small_seq_name_list.append(small_seq_name)
+
+        """ > Structure + Humans + Cameras optimization - Hongsuk (optional): """
+        # Load dust3r global alignment output
+        self.dust3r_ga_output_path = dust3r_ga_output_path
+        if self.dust3r_output_path is not None and self.dust3r_ga_output_path is not None:
+            dust3r_ga_output = pickle.load(open(self.dust3r_ga_output_path, 'rb'))
+            self.dust3r_ga_output = {} # {output_name: output}
+            no_ga_output_names = []
+            for output_name in self.dust3r_output.keys():
+                if output_name not in dust3r_ga_output.keys():
+                    no_ga_output_names.append(output_name)
+                else:
+                    self.dust3r_ga_output[output_name] = dust3r_ga_output[output_name]
+            if len(no_ga_output_names) > 0:
+                print(f'Warning: {no_ga_output_names} does not have global alignment output')
+        # Load multihmr output
+        self.multihmr_output_path = multihmr_output_path
+        if self.dust3r_output_path is not None and self.dust3r_ga_output_path is not None and self.multihmr_output_path is not None:
+            multihmr_output = pickle.load(open(self.multihmr_output_path, 'rb'))
+            self.multihmr_output = {} # {output_name: output}
+            no_multihmr_output_names = []
+            for output_name in self.dust3r_output.keys():
+                if output_name not in multihmr_output.keys():
+                    no_multihmr_output_names.append(output_name)
+                else:
+                    self.multihmr_output[output_name] = multihmr_output[output_name]
+            if len(no_multihmr_output_names) > 0:
+                print(f'Warning: {no_multihmr_output_names} does not have multihmr output')
+        """ Structure + Humans + Cameras optimization - Hongsuk (optional) < """
 
         # Load dataset metadata and create sample list
         self._load_annot_paths_and_cameras()
@@ -148,8 +187,20 @@ class EgoHumansDataset(Dataset):
                     continue
 
                 # add camera data
-                per_frame_data['cameras'] = {cam: annot['cameras'][cam] for cam in selected_cameras} # dictionrary of camera names and their parameters
-                
+                # per_frame_data['cameras'] = {cam: annot['cameras'][cam] for cam in selected_cameras} # dictionrary of camera names and their parameters
+                per_frame_data['cameras'] = {}
+                for cam in selected_cameras:
+                    annot_cam = annot['cameras'][cam]
+                    cam2world_R = annot_cam['cam2world_R']
+                    cam2world_t = annot_cam['cam2world_t']
+
+                    # make 4by4 transformation matrix and save
+                    cam2world_Rt = np.concatenate((cam2world_R, cam2world_t[:, None]), axis=1)
+                    cam2world_Rt_4by4 = np.concatenate((cam2world_Rt, np.array([[0, 0, 0, 1]])), axis=0)
+                    per_frame_data['cameras'][cam] = {
+                        'cam2world_4by4': cam2world_Rt_4by4,
+                    }
+
                 # add 2d pose and bbox annot data
                 per_frame_data['annot_and_img_paths'] = {}
                 for camera_name in selected_cameras:
@@ -184,28 +235,25 @@ class EgoHumansDataset(Dataset):
         seq = sample['sequence']
         frame = sample['frame']
 
-        # get camera parameters
+        """ get camera parameters; GT parameters """
         cameras = sample['cameras'] 
         # Align cameras to first camera frame
-        first_cam = list(cameras.keys())[0]
-        first_cam_R = cameras[first_cam]['cam2world_R'] 
-        first_cam_t = cameras[first_cam]['cam2world_t']
-        # Transform all cameras relative to first camera
-        for cam in cameras:
-            R = cameras[cam]['cam2world_R']
-            t = cameras[cam]['cam2world_t']
-            
-            # New rotation: R_new = R * R_first.T
-            cameras[cam]['cam2world_R'] = R @ first_cam_R.T
-            
-            # New translation: t_new = t - R_new * t_first
-            cameras[cam]['cam2world_t'] = t - (cameras[cam]['cam2world_R'] @ first_cam_t)
+        first_cam = sorted(cameras.keys())[0]
+        first_cam_Rt_4by4 = cameras[first_cam]['cam2world_4by4'].copy()
 
+        # make camera parameters homogeneous and invert
+        first_cam_Rt_inv_4by4 = np.linalg.inv(first_cam_Rt_4by4)
+        
+        # Transform all cameras relative to first camera
+        for cam in sorted(cameras.keys()):
+            cam_Rt_4by4 = cameras[cam]['cam2world_4by4']
+            new_cam_Rt_4by4 = first_cam_Rt_inv_4by4 @ cam_Rt_4by4
+            cameras[cam]['cam2world_4by4'] = new_cam_Rt_4by4
 
         # filter camera names that exist in both self.camera_names and cameras
         selected_cameras = sorted([cam for cam in cameras.keys() if cam in self.camera_names])
 
-        # load image
+        """ load image for Dust3r network inferences """
         multiview_images = {}
         img_path_list = [sample['annot_and_img_paths'][cam]['img_path'] for cam in selected_cameras]
         dust3r_input_imgs = dust3r_load_images(img_path_list, size=self.dust3r_image_size, verbose=False)
@@ -222,12 +270,19 @@ class EgoHumansDataset(Dataset):
         multiview_images = {cam: new_dust3r_input_imgs[i] for i, cam in enumerate(selected_cameras)}
         multiview_affine_transforms = {cam: get_dust3r_affine_transform(img_path, size=self.dust3r_image_size) for cam, img_path in zip(selected_cameras, img_path_list)}
 
-        # get dust3r output
+        """ load image for MultiHMR inference """
+        # let's use the first camera for now
+        multihmr_first_cam_input_image, _, multihmr_first_cam_affine_matrix = get_multihmr_input_image(sample['annot_and_img_paths'][first_cam]['img_path'], self.multihmr_image_size)
+        multihmr_first_cam_intrinsic = get_multihmr_camera_parameters(self.multihmr_image_size)
+
+        """ get dust3r output; Predicted parameters """
         if self.dust3r_output_path is not None:
             dust3r_network_output = self.dust3r_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['output']
             del dust3r_network_output['loss']
+        if self.dust3r_output_path is not None and self.dust3r_ga_output_path is not None:
+            dust3r_ga_output = self.dust3r_ga_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['dust3r_ga']
 
-        # load 2d annot for human optimization later
+        """ load 2d annot for human optimization later; GT parameters """
         multiview_multiple_human_2d_cam_annot = {}
         for camera_name in selected_cameras:
             # Load image if it exists
@@ -262,10 +317,24 @@ class EgoHumansDataset(Dataset):
                         'bbox': bbox
                     }
 
-        # load 3d world annot
+        """ load 3d world annot; GT parameters """
         world_multiple_human_3d_annot = {}
         for human_name in sample['world_data'].keys():
             world_multiple_human_3d_annot[human_name] = sample['world_data'][human_name]
+
+        """ get MultiHMR output; Predicted parameters """
+        if self.dust3r_output_path is not None and self.dust3r_ga_output_path is not None and self.multihmr_output_path is not None:
+            multihmr_output = self.multihmr_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['first_cam_humans']
+            
+            # assign the human names to the multihmr output
+            # Later, you can replace the multihmr_2d_pred with ViTPose 2D keypoints output
+            first_cam_human_names = list(multiview_multiple_human_2d_cam_annot[first_cam].keys())
+            multihmr_2d_pred = [human['j2d'].cpu().numpy() for human in multihmr_output]
+            egohumans_2d_annot = [multiview_multiple_human_2d_cam_annot[first_cam][human_name]['pose2d'] for human_name in first_cam_human_names]
+            multihmr_output_human_names = assign_human_names_to_multihmr_output(multihmr_first_cam_affine_matrix, multihmr_2d_pred, egohumans_2d_annot, first_cam_human_names, \
+                                                                                '') # sample['annot_and_img_paths'][first_cam]['img_path']) 
+            multihmr_output_dict = {multihmr_output_human_names[i]: multihmr_output[i] for i in range(len(multihmr_output))}
+                                                                        
 
         # Load all required data
         # Data dictionary contains:
@@ -278,17 +347,19 @@ class EgoHumansDataset(Dataset):
         #     - pose2d: 2D keypoint coordinates, np array shape (133, 2+1), x, y, confidence
         #     - bbox: Bounding box coordinates, np array shape (4+1, ), x, y, w, h, confidence
 
-        # - world_multiple_human_3d_annot: Dict[human_name -> Dict] containing 3D world smplx parameters, this is for evaluation, you can put GT 3D joints here instead
+        # - world_multiple_human_3d_annot: Dict[human_name -> Dict] containing 3D world smpl parameters, this is for evaluation, you can put GT 3D joints here instead
         # - camera_parameters: Dict[camera_name -> Dict] containing camera parameters
 
         # - sequence: Sequence name/ID
         # - frame: Frame number
         data = {
-            'multiview_images': multiview_images,
+            'multiview_images': multiview_images, # for Dust3R network inference
             'multiview_affine_transforms': multiview_affine_transforms,
-            'multiview_multiple_human_2d_cam_annot': multiview_multiple_human_2d_cam_annot,
-            'multiview_cameras': cameras,
-            'world_multiple_human_3d_annot': world_multiple_human_3d_annot,
+            'multiview_multiple_human_2d_cam_annot': multiview_multiple_human_2d_cam_annot, # groundtruth 2D annotations
+            'multiview_cameras': cameras, # groundtruth camera parameters
+            'world_multiple_human_3d_annot': world_multiple_human_3d_annot, # groundtruth 3D annotations
+            'multihmr_first_cam_input_image': multihmr_first_cam_input_image, # for MultiHMR inference
+            'multihmr_intrinsic': multihmr_first_cam_intrinsic, # for MultiHMR inference
             'sequence': seq,
             'frame': frame
         }
@@ -296,8 +367,77 @@ class EgoHumansDataset(Dataset):
         # add dust3r network output if it exists
         if self.dust3r_output_path is not None:
             data['dust3r_network_output'] = dust3r_network_output
+        if self.dust3r_output_path is not None and self.dust3r_ga_output_path is not None:
+            data['dust3r_ga_output'] = dust3r_ga_output
+        if self.dust3r_output_path is not None and self.dust3r_ga_output_path is not None and self.multihmr_output_path is not None:
+            data['multihmr_output'] = multihmr_output_dict
 
         return data
+
+# assign human names to the multihmr output by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
+def assign_human_names_to_multihmr_output(multihmr_affine_matrix, multihmr_2d_pred_list, egohumans_2d_annot_list, egohumans_human_names, img_path=''):
+    assert len(multihmr_2d_pred_list) == len(egohumans_2d_annot_list) == len(egohumans_human_names), "The number of predictions, annotations, and human names should match!"
+    # multihmr_affine_matrix: np.ndarray shape (2, 3)
+    # multihmr_2d_pred_list: list of np.ndarray shape (127, 2)
+    # egohumans_2d_annot_list: list of np.ndarray shape (133, 2)
+    # egohumans_human_names: list of human names, the indices should match the order of egohumans_2d_annot_list
+
+    # apply the affine transformation to the multihmr 2d predictions
+    multihmr_2d_pred_transformed_list = []
+    for i in range(len(multihmr_2d_pred_list)):
+        homogeneous_coords = np.hstack([multihmr_2d_pred_list[i], np.ones((multihmr_2d_pred_list[i].shape[0], 1))])
+        multihmr_2d_pred_transformed = (multihmr_affine_matrix @ homogeneous_coords.T)[:2, :].T
+
+        # map the multihmr 2d pred to the COCO_WHOLEBODY_KEYPOINTS
+        placeholder_multihmr_2d_pred_transformed = np.zeros((len(COCO_WHOLEBODY_KEYPOINTS), 2))
+        for i, joint_name in enumerate(COCO_WHOLEBODY_KEYPOINTS):
+            if joint_name in SMPLX_JOINT_NAMES:
+                # print(f'{joint_name}')
+                placeholder_multihmr_2d_pred_transformed[i, :2] = multihmr_2d_pred_transformed[SMPLX_JOINT_NAMES.index(joint_name)]
+                # placeholder_multihmr_2d_pred_transformed[i, 2] = 1
+
+        multihmr_2d_pred_transformed_list.append(placeholder_multihmr_2d_pred_transformed)
+
+    def draw_2d_keypoints(img, keypoints, keypoints_name=None, color=(0, 255, 0), radius=3):
+        for i, keypoint in enumerate(keypoints):
+            if keypoints_name is not None:
+                if keypoints_name[i] in ['nose1', 'nose2', 'nose3', 'nose4']:
+                    img = cv2.putText(img, keypoints_name[i], (int(keypoint[0]), int(keypoint[1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            img = cv2.circle(img, (int(keypoint[0]), int(keypoint[1])), radius, color, -1)
+        return img
+    
+    if img_path != '':
+        img = cv2.imread(img_path)
+        # draw the predicted and annotated 2D keypoints on the image
+        for i in range(len(multihmr_2d_pred_transformed_list)):
+            # Draw index
+            img = cv2.putText(img, str(i), (int(multihmr_2d_pred_transformed_list[i][0, 0]), int(multihmr_2d_pred_transformed_list[i][0, 1])), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
+            # img = draw_2d_keypoints(img, multihmr_2d_pred_transformed_list[i], keypoints_name=COCO_WHOLEBODY_KEYPOINTS, color=(0, 255, 0), radius=3)
+        for i in range(len(egohumans_2d_annot_list)):
+            # Draw index
+            img = cv2.putText(img, str(i), (int(egohumans_2d_annot_list[i][0, 0]), int(egohumans_2d_annot_list[i][0, 1])), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
+            # Draw the name too
+            img = cv2.putText(img, egohumans_human_names[i], (int(egohumans_2d_annot_list[i][0, 0]), int(egohumans_2d_annot_list[i][0, 1])), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
+            # img = draw_2d_keypoints(img, egohumans_2d_annot_list[i], color=(0, 0, 255), radius=3)
+        cv2.imwrite('multihmr_2d_pred_transformed.png', img)
+
+    # build a cost matrix for association by hungarian algorithm
+    cost_matrix = np.zeros((len(multihmr_2d_pred_transformed_list), len(egohumans_2d_annot_list)))
+    for i, pred in enumerate(multihmr_2d_pred_transformed_list):
+        for j, annot in enumerate(egohumans_2d_annot_list):
+            # compute the euclidean distance between the predicted and annotated 2D keypoints   
+            cost_matrix[i, j] = np.sum(annot[:, 2:] * np.sqrt(np.sum((pred - annot[:, :2])**2, axis=1)))    
+    
+    # run the hungarian algorithm to find the optimal assignment
+    row_indices, col_indices = linear_sum_assignment(cost_matrix)
+
+    # assign the human names to the multihmr output
+    multihmr_output_human_names = [egohumans_human_names[j] for j in col_indices]
+    # print the index of multihmr output and its assigned egohumans human name
+    # for i in range(len(multihmr_output_human_names)):
+    #     print(f'multihmr output index: {i}, assigned egohumans human name: {multihmr_output_human_names[i]}')
+
+    return multihmr_output_human_names
 
 # get the affine transform matrix from cropped image to original image
 # this is just to get the affine matrix (crop image to original image) - Hongsuk
@@ -335,9 +475,67 @@ def get_dust3r_affine_transform(file, size=512, square_ok=False):
     
     return affine_matrix
 
+# open image for MultiHMR inference
+def get_multihmr_input_image(img_path, img_size):
+    """ Open image at path, resize and pad """
 
+    # Open and reshape
+    img_pil = Image.open(img_path).convert('RGB')
+    
+    # Get original size
+    original_width, original_height = img_pil.size
 
-def create_dataloader(data_root, dust3r_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None):
+    # reisze to the target size while keeping the aspect ratio
+    img_pil = ImageOps.contain(img_pil, (img_size,img_size)) 
+
+    # Get new size
+    new_width, new_height = img_pil.size
+    # Calculate scaling factors
+    scale_x = original_width / new_width
+    scale_y = original_height / new_height
+
+    # Keep a copy for visualisations.
+    img_pil_bis = ImageOps.pad(img_pil.copy(), size=(img_size,img_size), color=(255, 255, 255)) # image is keep centered
+    img_pil = ImageOps.pad(img_pil, size=(img_size,img_size)) # pad with zero on the smallest side
+    
+    # Get new size
+    padded_new_width, padded_new_height = img_pil_bis.size
+    pad_width = (new_width - padded_new_width) / 2
+    pad_height = (new_height - padded_new_height) / 2
+    
+    # Calculate translation
+    translate_x = pad_width * scale_x
+    translate_y = pad_height * scale_y
+    
+    # Create the affine transformation matrix
+    affine_matrix = np.array([
+        [scale_x, 0, translate_x],
+        [0, scale_y, translate_y]
+    ])
+
+    # Go to numpy 
+    resize_img = np.asarray(img_pil)
+
+    # Normalize and go to torch.
+    resize_img = normalize_rgb(resize_img)
+    return resize_img, img_pil_bis, affine_matrix
+
+def get_multihmr_camera_parameters(img_size, fov=60, p_x=None, p_y=None):
+    """ Given image size, fov and principal point coordinates, return K the camera parameter matrix"""
+    K = torch.eye(3)
+    # Get focal length.
+    focal = get_focalLength_from_fieldOfView(fov=fov, img_size=img_size)
+    K[0,0], K[1,1] = focal, focal
+
+    # Set principal point
+    if p_x is not None and p_y is not None:
+            K[0,-1], K[1,-1] = p_x * img_size, p_y * img_size
+    else:
+            K[0,-1], K[1,-1] = img_size//2, img_size//2
+
+    return K
+
+def create_dataloader(data_root, dust3r_output_path=None, dust3r_ga_output_path=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None):
     """
     Create a dataloader for the multiview human dataset
     
@@ -353,6 +551,8 @@ def create_dataloader(data_root, dust3r_output_path=None, batch_size=8, split='t
     dataset = EgoHumansDataset(
         data_root=data_root,
         dust3r_output_path=dust3r_output_path,
+        dust3r_ga_output_path=dust3r_ga_output_path,
+        multihmr_output_path=multihmr_output_path,
         split=split,
         subsample_rate=subsample_rate,
         cam_names=cam_names
@@ -371,9 +571,11 @@ def create_dataloader(data_root, dust3r_output_path=None, batch_size=8, split='t
 
 if __name__ == '__main__':
     data_root = '/home/hongsuk/projects/egohumans/data'
-    dust3r_output_path = None # '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl'
-    dataloader = create_dataloader(data_root, dust3r_output_path=dust3r_output_path, batch_size=1, split='test', num_workers=0)
-    for data in dataloader:
-        print(data.keys())
-        import pdb; pdb.set_trace()
-        break
+    dust3r_output_path =  '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl'
+    dust3r_ga_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_30:17:54.pkl'
+    multihmr_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl'
+    dataset, dataloader = create_dataloader(data_root, dust3r_output_path=dust3r_output_path, dust3r_ga_output_path=dust3r_ga_output_path, multihmr_output_path=multihmr_output_path, batch_size=1, split='test', num_workers=0)
+    item = dataset.get_single_item(0)
+    # for data in dataloader:
+    #     import pdb; pdb.set_trace()
+    #     break

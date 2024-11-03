@@ -5,8 +5,7 @@ total_output = {
     'sequence_frame_cam01cam02cam03cam04': {  # e.g. '001_tagging_0_cam01cam02cam03cam04'
         'gt_cameras': {
             'cam01': {
-                'cam2world_R': np.ndarray,  # shape (3, 3), rotation matrix
-                'cam2world_t': np.ndarray,  # shape (3,), translation vector
+                'cam2world_4by4': np.ndarray,  # shape (4, 4), camera extrinsic matrix
                 'K': np.ndarray,  # shape (3, 3), intrinsic matrix
                 'img_width': int,
                 'img_height': int
@@ -69,7 +68,7 @@ def adjust_lr(cur_iter, niter, lr_base, lr_min, optimizer, schedule):
     adjust_learning_rate_by_lr(optimizer, lr)
     return lr
 
-def parse_to_save_data(scene, cam_names):
+def parse_to_save_data(scene, cam_names, main_cam_idx=None):
     # Get optimized values from scene
     pts3d = scene.get_pts3d()
     depths = scene.get_depthmaps()
@@ -86,6 +85,14 @@ def parse_to_save_data(scene, cam_names):
     msk = to_numpy(msk)
     confs = to_numpy(confs)
     rgbimg = scene.imgs
+
+    if main_cam_idx is not None:
+        main_cam_cam2world = cams2world[main_cam_idx]
+        # transform all the cameras and pts3d with the transformation matrix, which is the inverse of the main cam extrinsic matrix
+        main_cam_world2cam = np.linalg.inv(main_cam_cam2world)
+        for i, cam_name in enumerate(cam_names):
+            cams2world[i] = main_cam_world2cam @ cams2world[i]
+            pts3d[i] =  pts3d[i] @ main_cam_world2cam[:3, :3].T + main_cam_world2cam[:3, 3:].T
 
     # Save the results as a pickle file
     results = {}
@@ -159,16 +166,18 @@ def main(output_path: str = './outputs/egohumans', dust3r_output_path: str = '/h
         output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"
         total_output[output_name] = {}
         total_output[output_name]['gt_cameras'] = sample['multiview_cameras']
-        total_output[output_name]['dust3r_ga'] = parse_to_save_data(scene, cam_names)
+        total_output[output_name]['dust3r_ga'] = parse_to_save_data(scene, cam_names, 0)
         
         # visualize
         if vis:
-            show_env_in_viser(world_env=total_output[output_name]['dust3r_ga'], world_scale_factor=5.)
+            try:
+                show_env_in_viser(world_env=total_output[output_name]['dust3r_ga'], world_scale_factor=10., gt_cameras=total_output[output_name]['gt_cameras'])
+            except:
+                pass
 
 
     # Save total output
-    # get date and time (day:hour:minute)
-    # time in pacific time
+    # get date and time (day:hour:minute) time in pacific time
     now = datetime.now(pytz.timezone('US/Pacific')).strftime("%d:%H:%M")
     with open(os.path.join(output_path, f'dust3r_ga_output_{now}.pkl'), 'wb') as f:
         pickle.dump(total_output, f)
