@@ -31,31 +31,31 @@ class PointCloudOptimizer(BasePCOptimizer):
 
         # Hongsuk added
         self.has_human_cue = has_human_cue
-        # if self.has_human_cue:
-        #     from multihmr.blocks import SMPL_Layer
-        #     from multihmr.utils import get_smplx_joint_names
-        #     self.human_loss_weight = 15.0
-        #     self.smplx_layer = SMPL_Layer(type='smplx', gender='neutral', num_betas=10, kid=False, person_center='head')
+        if self.has_human_cue:
+            from multihmr.blocks import SMPL_Layer
+            from multihmr.utils import get_smplx_joint_names
+            self.human_loss_weight = 15.0
+            self.smplx_layer = SMPL_Layer(type='smplx', gender='neutral', num_betas=10, kid=False, person_center='head')
 
-        #     # make smplx_layer.bm_x attributes all requires.grad False
-        #     # Note that self.human_transl and self.human_global_rotvec are independent from smplx_layer.bm_x according to MultiHMR code
-        #     for attr in ['betas', 'global_orient', 'body_pose', 'transl', 'left_hand_pose', 'right_hand_pose', 'jaw_pose', 'leye_pose', 'reye_pose', 'expression']:
-        #         # self.smplx_layer.bm_x.__setattr__(attr).requires_grad_(False)
-        #         getattr(self.smplx_layer.bm_x, attr).requires_grad_(False)
+            # make smplx_layer.bm_x attributes all requires.grad False
+            # Note that self.human_transl and self.human_global_rotvec are independent from smplx_layer.bm_x according to MultiHMR code
+            for attr in ['betas', 'global_orient', 'body_pose', 'transl', 'left_hand_pose', 'right_hand_pose', 'jaw_pose', 'leye_pose', 'reye_pose', 'expression']:
+                # self.smplx_layer.bm_x.__setattr__(attr).requires_grad_(False)
+                getattr(self.smplx_layer.bm_x, attr).requires_grad_(False)
 
-        #     # initialize with random values
-        #     # at the moment, only single person
-        #     # these are things to optimize! - Hongsuk
-        #     self.human_transl = nn.Parameter(torch.randn(1, 3).to(self.device)) # (1, 3)
-        #     self.human_global_rotvec = nn.Parameter(torch.randn(1, 1, 3).to(self.device)) # (1, 1, 3)
-        #     self.human_relative_rotvec = nn.Parameter(torch.randn(1, 52, 3).to(self.device)) # (1, 52, 3)
-        #     self.human_shape = nn.Parameter(torch.randn(1, 10).to(self.device)) # (1, 10)
-        #     self.human_expression = nn.Parameter(torch.randn(1, 10).to(self.device)) # (1, 10)
+            # initialize with random values
+            # at the moment, only single person
+            # these are things to optimize! - Hongsuk
+            self.human_transl = nn.Parameter(torch.randn(1, 3).to(self.device)) # (1, 3)
+            self.human_global_rotvec = nn.Parameter(torch.randn(1, 1, 3).to(self.device)) # (1, 1, 3)
+            self.human_relative_rotvec = nn.Parameter(torch.randn(1, 52, 3).to(self.device)) # (1, 52, 3)
+            self.human_shape = nn.Parameter(torch.randn(1, 10).to(self.device)) # (1, 10)
+            self.human_expression = nn.Parameter(torch.randn(1, 10).to(self.device)) # (1, 10)
 
-        #     # set human_relative_rotvec, human_shape, human_expression requires_grad to False
-        #     # self.human_relative_rotvec.requires_grad_(False)
-        #     # self.human_shape.requires_grad_(False)
-        #     self.human_expression.requires_grad_(False)
+            # set human_relative_rotvec, human_shape, human_expression requires_grad to False
+            self.human_relative_rotvec.requires_grad_(False)
+            self.human_shape.requires_grad_(False)
+            self.human_expression.requires_grad_(False)
 
         # adding thing to optimize
         self.im_depthmaps = nn.ParameterList(torch.randn(H, W)/10-3 for H, W in self.imshapes)  # log(depth)

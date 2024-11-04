@@ -191,15 +191,25 @@ class EgoHumansDataset(Dataset):
                 per_frame_data['cameras'] = {}
                 for cam in selected_cameras:
                     annot_cam = annot['cameras'][cam]
-                    cam2world_R = annot_cam['cam2world_R']
-                    cam2world_t = annot_cam['cam2world_t']
+                    per_frame_data['cameras'][cam] = annot_cam 
 
-                    # make 4by4 transformation matrix and save
-                    cam2world_Rt = np.concatenate((cam2world_R, cam2world_t[:, None]), axis=1)
-                    cam2world_Rt_4by4 = np.concatenate((cam2world_Rt, np.array([[0, 0, 0, 1]])), axis=0)
-                    per_frame_data['cameras'][cam] = {
-                        'cam2world_4by4': cam2world_Rt_4by4,
-                    }
+                    # cam2world_R = annot_cam['cam2world_R']
+                    # cam2world_t = annot_cam['cam2world_t']
+
+                    # # make 4by4 transformation matrix and save
+                    # cam2world_Rt = np.concatenate((cam2world_R, cam2world_t[:, None]), axis=1)
+                    # cam2world_Rt_4by4 = np.concatenate((cam2world_Rt, np.array([[0, 0, 0, 1]])), axis=0)
+                    # per_frame_data['cameras'][cam]['cam2world_4by4'] = cam2world_Rt_4by4
+                    per_frame_data['cameras'][cam]['cam2world_4by4'] = annot_cam['cam2world']
+                    
+                    # # make intrinsic matrix and save 
+                    # K = annot_cam['K'] # (8,)        fx = params[0]
+                    # fx = K[0]
+                    # fy = K[1]
+                    # cx = K[2]
+                    # cy = K[3]
+                    # K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+                    # per_frame_data['cameras'][cam]['K'] = K
 
                 # add 2d pose and bbox annot data
                 per_frame_data['annot_and_img_paths'] = {}
@@ -214,6 +224,7 @@ class EgoHumansDataset(Dataset):
                     per_frame_data['annot_and_img_paths'][camera_name] = {
                         'pose2d_annot_path': pose2d_annot_path,
                         'bbox_annot_path': bbox_annot_path,
+
                         'img_path': img_path
                     }
                     # do this in __getitem__
@@ -250,6 +261,96 @@ class EgoHumansDataset(Dataset):
             new_cam_Rt_4by4 = first_cam_Rt_inv_4by4 @ cam_Rt_4by4
             cameras[cam]['cam2world_4by4'] = new_cam_Rt_4by4
 
+        """ load 3d world annot; GT parameters """
+        world_multiple_human_3d_annot = {}
+        for human_name in sample['world_data'].keys():
+            world_multiple_human_3d_annot[human_name] = sample['world_data'][human_name]
+
+        """ align the world annot to the first camera frame 
+        # but it's messy to get correct transformation...
+        # align the world annot to the first camera frame
+        for human_name, smplx_3d_params in world_multiple_human_3d_annot.items():
+            transl, global_orient = smplx_3d_params['transl'], smplx_3d_params['global_orient']
+
+            world_multiple_human_3d_annot[human_name]['transl'] = first_cam_Rt_inv_4by4[:3, :3] @ transl + first_cam_Rt_inv_4by4[:3, 3]
+            # world_multiple_human_3d_annot[human_name]['global_orient'] = first_cam_Rt_inv_4by4[:3, :3] @ global_orient
+            # Convert global_orient from axis-angle to rotation matrix
+            global_orient_mat = cv2.Rodrigues(global_orient)[0]  # (3,3)
+            # Multiply by first camera rotation
+            aligned_global_orient_mat = first_cam_Rt_inv_4by4[:3, :3] @ global_orient_mat
+            
+            # Convert back to axis-angle representation
+            aligned_global_orient, _ = cv2.Rodrigues(aligned_global_orient_mat)
+            # Update the global orientation
+            world_multiple_human_3d_annot[human_name]['global_orient'] = aligned_global_orient.reshape(-1)
+
+
+        # TEMPORARY CODE FOR VISUALIZATION
+        import smplx
+        import matplotlib.pyplot as plt
+        from collections import defaultdict
+        device = 'cuda'
+        # for visualization, transform the human parameters to each camera frame and project to 2D and draw 2D keypoints and save them
+        smpl_model_dir = '/home/hongsuk/projects/egohumans/egohumans/external/cliff/common/../data'
+        smpl_model = smplx.create(smpl_model_dir, "smpl").to(device)
+        smpl_model = smpl_model.float()
+        
+
+        vis_data = defaultdict(dict)
+        for human_name, world_data_human in world_multiple_human_3d_annot.items():
+
+            # first decode the smplx parameters
+            smpl_output = smpl_model(betas=torch.from_numpy(world_data_human['betas'])[None, :].to(device).float(),
+                                        body_pose=torch.from_numpy(world_data_human['body_pose'])[None, :].to(device).float(),
+                                        global_orient=torch.from_numpy(world_data_human['global_orient'])[None, :].to(device).float(),
+                                        pose2rot=True,
+                                        transl=torch.zeros((1, 3), device=device))
+                                        # transl=torch.from_numpy(world_data_human['transl'])[None, :].to(device).float())
+
+            # compenstate rotation (translation from origin to root joint was not cancled)
+            smpl_joints = smpl_output.joints.detach().squeeze(0).cpu().numpy()
+            root_joint_coord = smpl_joints[0:1, :3]
+            smpl_trans = world_data_human['transl'].reshape(1, 3) - root_joint_coord + np.dot(first_cam_Rt_inv_4by4[:3, :3], root_joint_coord.transpose(1, 0)).transpose(1, 0)
+
+            smpl_vertices = smpl_output.vertices.detach().squeeze(0).cpu().numpy()
+            smpl_vertices += smpl_trans
+            smpl_joints += smpl_trans
+
+            for cam in sorted(cameras.keys()):
+                cam2world_4by4 = cameras[cam]['cam2world_4by4']
+                world2cam_4by4 = np.linalg.inv(cam2world_4by4)
+                intrinsic = cameras[cam]['K']
+                # convert the smpl_joitns in world coordinates to camera coordinates
+                # smpl_joints are in world coordinates and they are numpy arrays
+                points_cam = world2cam_4by4 @ np.concatenate((smpl_joints, np.ones((smpl_joints.shape[0], 1))), axis=1).T # (4, J)
+                points_cam = points_cam[:3, :].T # (J, 3)
+
+                points_img = vec_image_from_cam(intrinsic, points_cam) # (J, 2)
+
+                vis_data[cam][human_name] = points_img
+
+        # Draw keypoints on images and save them
+        for cam in vis_data.keys():
+            # Load image
+            img_path = sample['annot_and_img_paths'][cam]['img_path']
+            img = cv2.imread(img_path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # Draw keypoints for each human
+            for human_name, keypoints in vis_data[cam].items():
+                # Draw each keypoint as a circle
+                for kp in keypoints:
+                    x, y = int(kp[0]), int(kp[1])
+                    if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:  # Only draw if within image bounds
+                        cv2.circle(img, (x, y), 3, (255,0,0), -1)
+            
+                # Save the annotated image
+                save_dir = os.path.join('./vis_keypoints')
+                os.makedirs(save_dir, exist_ok=True)
+                save_path = os.path.join(save_dir, f'{cam}_{human_name}.jpg')
+                plt.imsave(save_path, img)
+        """
+        
         # filter camera names that exist in both self.camera_names and cameras
         selected_cameras = sorted([cam for cam in cameras.keys() if cam in self.camera_names])
 
@@ -317,11 +418,6 @@ class EgoHumansDataset(Dataset):
                         'bbox': bbox
                     }
 
-        """ load 3d world annot; GT parameters """
-        world_multiple_human_3d_annot = {}
-        for human_name in sample['world_data'].keys():
-            world_multiple_human_3d_annot[human_name] = sample['world_data'][human_name]
-
         """ get MultiHMR output; Predicted parameters """
         if self.dust3r_output_path is not None and self.dust3r_ga_output_path is not None and self.multihmr_output_path is not None:
             multihmr_output = self.multihmr_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['first_cam_humans']
@@ -332,9 +428,8 @@ class EgoHumansDataset(Dataset):
             multihmr_2d_pred = [human['j2d'].cpu().numpy() for human in multihmr_output]
             egohumans_2d_annot = [multiview_multiple_human_2d_cam_annot[first_cam][human_name]['pose2d'] for human_name in first_cam_human_names]
             multihmr_output_human_names = assign_human_names_to_multihmr_output(multihmr_first_cam_affine_matrix, multihmr_2d_pred, egohumans_2d_annot, first_cam_human_names, \
-                                                                                '') # sample['annot_and_img_paths'][first_cam]['img_path']) 
+                                                                                '')#sample['annot_and_img_paths'][first_cam]['img_path']) 
             multihmr_output_dict = {multihmr_output_human_names[i]: multihmr_output[i] for i in range(len(multihmr_output))}
-                                                                        
 
         # Load all required data
         # Data dictionary contains:
@@ -374,6 +469,29 @@ class EgoHumansDataset(Dataset):
 
         return data
 
+
+def vec_image_from_cam(intrinsics, point_3d, eps=1e-9):
+    fx, fy, cx, cy, k1, k2, k3, k4 = intrinsics
+
+    x = point_3d[:, 0]
+    y = point_3d[:, 1]
+    z = point_3d[:, 2]
+
+    a = x/z; b = y/z
+    r = np.sqrt(a*a + b*b)
+    theta = np.arctan(r)
+
+    theta_d = theta * (1 + k1*theta**2 + k2*theta**4 + k3*theta**6 + k4*theta**8)
+    x_prime = (theta_d/r)*a
+    y_prime = (theta_d/r)*b
+
+    u = fx*(x_prime + 0) + cx
+    v = fy*y_prime + cy
+
+    point_2d = np.concatenate([u.reshape(-1, 1), v.reshape(-1, 1)], axis=1)
+
+    return point_2d
+
 # assign human names to the multihmr output by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
 def assign_human_names_to_multihmr_output(multihmr_affine_matrix, multihmr_2d_pred_list, egohumans_2d_annot_list, egohumans_human_names, img_path=''):
     assert len(multihmr_2d_pred_list) == len(egohumans_2d_annot_list) == len(egohumans_human_names), "The number of predictions, annotations, and human names should match!"
@@ -412,13 +530,13 @@ def assign_human_names_to_multihmr_output(multihmr_affine_matrix, multihmr_2d_pr
         for i in range(len(multihmr_2d_pred_transformed_list)):
             # Draw index
             img = cv2.putText(img, str(i), (int(multihmr_2d_pred_transformed_list[i][0, 0]), int(multihmr_2d_pred_transformed_list[i][0, 1])), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
-            # img = draw_2d_keypoints(img, multihmr_2d_pred_transformed_list[i], keypoints_name=COCO_WHOLEBODY_KEYPOINTS, color=(0, 255, 0), radius=3)
+            img = draw_2d_keypoints(img, multihmr_2d_pred_transformed_list[i], keypoints_name=COCO_WHOLEBODY_KEYPOINTS, color=(0, 255, 0), radius=3)
         for i in range(len(egohumans_2d_annot_list)):
             # Draw index
             img = cv2.putText(img, str(i), (int(egohumans_2d_annot_list[i][0, 0]), int(egohumans_2d_annot_list[i][0, 1])), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
             # Draw the name too
             img = cv2.putText(img, egohumans_human_names[i], (int(egohumans_2d_annot_list[i][0, 0]), int(egohumans_2d_annot_list[i][0, 1])), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
-            # img = draw_2d_keypoints(img, egohumans_2d_annot_list[i], color=(0, 0, 255), radius=3)
+            img = draw_2d_keypoints(img, egohumans_2d_annot_list[i], color=(0, 0, 255), radius=3)
         cv2.imwrite('multihmr_2d_pred_transformed.png', img)
 
     # build a cost matrix for association by hungarian algorithm
@@ -572,7 +690,7 @@ def create_dataloader(data_root, dust3r_output_path=None, dust3r_ga_output_path=
 if __name__ == '__main__':
     data_root = '/home/hongsuk/projects/egohumans/data'
     dust3r_output_path =  '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl'
-    dust3r_ga_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_30:17:54.pkl'
+    dust3r_ga_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_02:20:29.pkl'
     multihmr_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl'
     dataset, dataloader = create_dataloader(data_root, dust3r_output_path=dust3r_output_path, dust3r_ga_output_path=dust3r_ga_output_path, multihmr_output_path=multihmr_output_path, batch_size=1, split='test', num_workers=0)
     item = dataset.get_single_item(0)

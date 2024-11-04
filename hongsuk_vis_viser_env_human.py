@@ -80,13 +80,12 @@ def get_color(idx):
     ])  
     return colors[idx % len(colors)]
     
-def show_env_human_in_viser(world_env_pkl: str, world_scale_factor: float = 1., smplx_vertices_dict: dict = None, smplx_faces: np.ndarray = None):
-    # Extract data from world_env dictionary
-    # Load world environment data estimated by Mast3r
-    with open(world_env_pkl, 'rb') as f:
-        world_env = pickle.load(f)
-
-
+def show_env_human_in_viser(world_env: dict = None, world_env_pkl: str = '', world_scale_factor: float = 1., smplx_vertices_dict: dict = None, smplx_faces: np.ndarray = None):
+    if world_env is None:
+        # Load world environment data estimated by Mast3r
+        with open(world_env_pkl, 'rb') as f:
+            world_env = pickle.load(f)
+    
     for img_name in world_env.keys():
         if img_name == 'non_img_specific':
             continue

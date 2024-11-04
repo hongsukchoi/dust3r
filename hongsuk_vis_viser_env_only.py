@@ -10,18 +10,86 @@ import smplx
 
 from scipy.spatial.transform import Rotation as R
 
+def procrustes_align(X, Y):
+    """
+    Performs Procrustes alignment between two sets of points X and Y
+    Returns scale, rotation, translation
+    
+    Args:
+        X: Ground truth points (N x 3)
+        Y: Points to be aligned (N x 3)
+    Returns:
+        scale: Scale factor
+        R: Rotation matrix (3 x 3) 
+        t: Translation vector (3,)
+    """
+    # Center the points
+    muX = X.mean(axis=0)
+    muY = Y.mean(axis=0)
+    
+    X0 = X - muX
+    Y0 = Y - muY
+
+    # Compute scale
+    ssX = (X0**2).sum()
+    ssY = (Y0**2).sum()
+    scale = np.sqrt(ssX/ssY)
+    
+    # Scale points
+    Y0 = Y0 * scale
+    
+    # Compute rotation
+    U, _, Vt = np.linalg.svd(X0.T @ Y0)
+    R = U @ Vt
+    
+    # Ensure right-handed coordinate system
+    if np.linalg.det(R) < 0:
+        Vt[-1,:] *= -1
+        R = U @ Vt
+    
+    # Compute translation
+    t = muX - scale * (R @ muY)
+    
+    return scale, R, t
 
 def main(world_env_pkl: str, world_scale_factor: float = 5.):
     show_env_in_viser(world_env_pkl, world_scale_factor)
 
-def show_env_in_viser(world_env_pkl: str = '', world_env: dict = None, world_scale_factor: float = 5.):
+def show_env_in_viser(world_env_pkl: str = '', world_env: dict = None, world_scale_factor: float = 5., gt_cameras: dict = None):
     if world_env is None:
         # Extract data from world_env dictionary
-        # Load world environment data estimated by Mast3r
         print(f"Loading world environment data from {world_env_pkl}")
         with open(world_env_pkl, 'rb') as f:
             world_env = pickle.load(f)
 
+    # If we have ground truth cameras, compute scale using Procrustes alignment
+    if gt_cameras is not None:
+        # Collect camera positions
+        gt_positions = []
+        est_positions = []
+        
+        for img_name in gt_cameras.keys():
+            if img_name in world_env:
+                # Get ground truth camera position
+                gt_pos = gt_cameras[img_name]['cam2world_4by4'][:3, 3]
+                gt_positions.append(gt_pos)
+                
+                # Get estimated camera position
+                est_pos = world_env[img_name]['cam2world'][:3, 3]
+                est_positions.append(est_pos)
+        
+        # Convert to numpy arrays
+        gt_positions = np.array(gt_positions)
+        est_positions = np.array(est_positions)
+        
+        # Perform Procrustes alignment
+        scale, _, _ = procrustes_align(gt_positions, est_positions)
+        print(f"Computed scale factor from Procrustes alignment: {scale:.4f}")
+        
+        # Use computed scale instead of provided world_scale_factor
+        world_scale_factor = scale
+
+    # Apply scaling
     for img_name in world_env.keys():
         if img_name == 'non_img_specific':
             continue
@@ -90,6 +158,42 @@ def show_env_in_viser(world_env_pkl: str = '', world_env: dict = None, world_sca
             axes_radius=0.04,
         )
         cam_handles.append(cam_handle)
+
+    if gt_cameras is not None:
+        #  'cam01': {
+        #         'cam2world_R': np.ndarray,  # shape (3, 3), rotation matrix
+        #         'cam2world_t': np.ndarray,  # shape (3,), translation vector
+        #         'K': np.ndarray,  # shape (3, 3), intrinsic matrix
+        #         'img_width': int,
+        #         'img_height': int
+        #     },
+        #     'cam02': {...},
+        #     'cam03': {...},
+        #     'cam04': {...}
+        
+        for img_name in gt_cameras.keys():
+            # Visualize the gt camera
+            camera = gt_cameras[img_name]
+            cam2world_Rt_homo = camera['cam2world_4by4'].copy()
+
+            cam2world_R = rot_180 @ cam2world_Rt_homo[:3, :3]
+            cam2world_t = cam2world_Rt_homo[:3, 3] @ rot_180
+
+            # rotation matrix to quaternion
+            quat = R.from_matrix(cam2world_R).as_quat()
+            # xyzw to wxyz
+            quat = np.concatenate([quat[3:], quat[:3]])
+            # translation vector
+            trans = cam2world_t   
+
+            # add camera
+            cam_handle = server.scene.add_frame(
+                f"/gt_cam_{img_name}",
+                wxyz=quat,
+                position=trans,
+            )
+            cam_handles.append(cam_handle)
+
 
     # add transform controls, initialize the location with the first two cameras
     control0 = server.scene.add_transform_controls(
