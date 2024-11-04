@@ -234,7 +234,7 @@ def init_human_params(multihmr_output, device = 'cuda'):
 
         # TEMP
         # make relative_rotvec, shape, expression not require grad
-        # optim_target_dict[human_name]['global_rotvec'].requires_grad = False
+        optim_target_dict[human_name]['global_rotvec'].requires_grad = False
         optim_target_dict[human_name]['relative_rotvec'].requires_grad = False
         optim_target_dict[human_name]['shape'].requires_grad = False
         optim_target_dict[human_name]['expression'].requires_grad = False
@@ -256,6 +256,8 @@ def init_human_params(multihmr_output, device = 'cuda'):
 
 def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl', dust3r_ga_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_30:17:54.pkl', dust3r_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl', egohumans_data_root: str = './data', vis: bool = False):
     Path(output_path).mkdir(parents=True, exist_ok=True)
+    vis_output_path = osp.join(output_path, 'vis')
+    Path(vis_output_path).mkdir(parents=True, exist_ok=True)
 
     # EgoHumans data
     # Fix batch size to 1 for now
@@ -267,7 +269,7 @@ def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '
     device = 'cuda'
     silent = False
     schedule = 'linear'
-    niter = 1000
+    niter = 500
     lr = 0.01
     lr_base = lr
     lr_min = 0.0001
@@ -364,7 +366,7 @@ def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '
                     img = draw_2d_keypoints(img, pose2d)
                     # draw the bbox
                     img = cv2.rectangle(img, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 255, 0), 2)
-                    cv2.imwrite(osp.join(output_path, f'{sample["sequence"]}_{sample["frame"]}_{cam_name}_{human_name}_2d_keypoints_bbox.png'), img[..., ::-1])
+                    cv2.imwrite(osp.join(vis_output_path, f'{sample["sequence"]}_{sample["frame"]}_{cam_name}_{human_name}_2d_keypoints_bbox.png'), img[..., ::-1])
 
                 multiview_multiperson_poses2d[human_name][cam_name] = torch.from_numpy(pose2d).to(device)
                 multiview_multiperson_bboxes[human_name][cam_name] = torch.from_numpy(bbox).to(device)
@@ -436,7 +438,7 @@ def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '
                         for human_name, joints in human_joints.items():
                             for joint in joints:
                                 img = cv2.circle(img, (int(joint[0]), int(joint[1])), 3, (0, 255, 0), -1)
-                        cv2.imwrite(osp.join(output_path, f'{sample["sequence"]}_{sample["frame"]}_{cam_name}_{human_name}_{bar.n}.png'), img[:, :, ::-1])
+                        cv2.imwrite(osp.join(vis_output_path, f'{sample["sequence"]}_{sample["frame"]}_{cam_name}_{bar.n}.png'), img[:, :, ::-1])
                 
         print("final losses: ", scene_loss.item(), human_loss.item())
 

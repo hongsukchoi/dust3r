@@ -421,7 +421,7 @@ class EgoHumansDataset(Dataset):
         """ get MultiHMR output; Predicted parameters """
         if self.dust3r_output_path is not None and self.dust3r_ga_output_path is not None and self.multihmr_output_path is not None:
             multihmr_output = self.multihmr_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['first_cam_humans']
-            
+
             # assign the human names to the multihmr output
             # Later, you can replace the multihmr_2d_pred with ViTPose 2D keypoints output
             first_cam_human_names = list(multiview_multiple_human_2d_cam_annot[first_cam].keys())
