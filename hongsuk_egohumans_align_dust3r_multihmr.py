@@ -68,6 +68,7 @@ from hongsuk_egohumans_dataloader import create_dataloader
 from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, SMPLX_JOINT_NAMES
 
 from hongsuk_vis_viser_env_only import show_env_in_viser
+from hongsuk_vis_viser_env_human import show_env_human_in_viser
 
 
 def draw_2d_keypoints(img, keypoints, keypoints_name=None, color=(0, 255, 0), radius=3):
@@ -196,7 +197,8 @@ def get_human_loss(smplx_layer, humans_optim_target_dict, cam_names, multiview_w
                 multiview_multihmr_j2d_transformed[:, i, :2] = multiview_multihmr_j2d[:, SMPLX_JOINT_NAMES.index(joint_name), :2]
                 multiview_multihmr_j2d_transformed[:, i, 2] = 1 # for validity check. 1 if the joint is valid, 0 otherwise
 
-        multiview_multihmr_j2d_transformed[:, :COCO_WHOLEBODY_KEYPOINTS.index('right_heel'), 2] *= 100 # main body joints are weighted 10 times more
+        multiview_multihmr_j2d_transformed[:, :COCO_WHOLEBODY_KEYPOINTS.index('right_heel')+1, 2] *= 100 # main body joints are weighted 10 times more
+        # multiview_multihmr_j2d_transformed[:, COCO_WHOLEBODY_KEYPOINTS.index('right_heel')+1:, 2] = 0 # ignore non-main body joints
 
         # compute the hubor loss using Pytorch between multiview_multihmr_j2d_transformed and multiview_poses2d
         one_human_loss = multiview_loss_weights[:, None, None].repeat(1, multiview_multihmr_j2d_transformed.shape[1], 1) \
@@ -216,10 +218,6 @@ def init_human_params(multihmr_output, device = 'cuda'):
 
     optim_target_dict = {} # human_name: str -> Dict[param_name: str -> nn.Parameter]
     for human_name, smplx_3d_params in multihmr_output.items():
-        # TEMP
-        if human_name != 'aria01':
-            continue
-
         # first extract data from the dictionary of smplx_3d_params 
         transl, rotvec, shape, expression = smplx_3d_params['transl'], smplx_3d_params['rotvec'], smplx_3d_params['shape'], smplx_3d_params['expression']
         # transl: (3), rotvec: (53, 3), shape: (10), expression: (10)
@@ -236,6 +234,7 @@ def init_human_params(multihmr_output, device = 'cuda'):
 
         # TEMP
         # make relative_rotvec, shape, expression not require grad
+        # optim_target_dict[human_name]['global_rotvec'].requires_grad = False
         optim_target_dict[human_name]['relative_rotvec'].requires_grad = False
         optim_target_dict[human_name]['shape'].requires_grad = False
         optim_target_dict[human_name]['expression'].requires_grad = False
@@ -255,7 +254,7 @@ def init_human_params(multihmr_output, device = 'cuda'):
 # I think there might be indexing error around camera names and human names
 
 
-def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl', dust3r_ga_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_30:17:54.pkl', dust3r_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl', egohumans_data_root: str = '/home/hongsuk/projects/egohumans/data', vis: bool = False):
+def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl', dust3r_ga_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_30:17:54.pkl', dust3r_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl', egohumans_data_root: str = './data', vis: bool = False):
     Path(output_path).mkdir(parents=True, exist_ok=True)
 
     # EgoHumans data
@@ -268,7 +267,7 @@ def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '
     device = 'cuda'
     silent = False
     schedule = 'linear'
-    niter = 300
+    niter = 1000
     lr = 0.01
     lr_base = lr
     lr_min = 0.0001
@@ -383,7 +382,7 @@ def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '
         print(f"Optimizing {len(human_params_names_to_optimize)} parameters of humans: {human_params_names_to_optimize}")
 
         # Visualize the initilization of human and world
-        # # TEMP
+        # TEMP
         # from hongsuk_vis_viser_env_human import show_env_human_in_viser
         # smplx_3d_params = multihmr_output['aria01']
         # smplx_output = smplx_layer(transl=smplx_3d_params['transl'][None, :],
@@ -421,7 +420,8 @@ def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '
 
                 # get human loss
                 human_loss, projected_joints = get_human_loss(smplx_layer, human_params, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, device)
-                loss = scene_loss + human_loss * 15
+                human_loss *= 15
+                loss = scene_loss + human_loss
 
                 loss.backward()
                 optimizer.step()
@@ -437,7 +437,7 @@ def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '
                             for joint in joints:
                                 img = cv2.circle(img, (int(joint[0]), int(joint[1])), 3, (0, 255, 0), -1)
                         cv2.imwrite(osp.join(output_path, f'{sample["sequence"]}_{sample["frame"]}_{cam_name}_{human_name}_{bar.n}.png'), img[:, :, ::-1])
-                    
+                
         print("final losses: ", scene_loss.item(), human_loss.item())
 
         # Save output
@@ -445,8 +445,28 @@ def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '
         total_output[output_name] = {}
         total_output[output_name]['gt_cameras'] = sample['multiview_cameras']
         total_output[output_name]['dust3r_ga'] = parse_to_save_data(scene, cam_names)
+        print("Output name: ", output_name)
         
-        show_env_in_viser(world_env=total_output[output_name]['dust3r_ga'], world_scale_factor=5.)
+        if vis:
+            smplx_vertices_dict = {}
+            for human_name, smplx_3d_params in human_params.items():
+                # extract transl, global_rotvec, relative_rotvec, shape, expression from nn.Parameter
+                transl = smplx_3d_params['transl'].detach()
+                global_rotvec = smplx_3d_params['global_rotvec'].detach()
+                relative_rotvec = smplx_3d_params['relative_rotvec'].detach()
+                shape = smplx_3d_params['shape'].detach()
+                expression = smplx_3d_params['expression'].detach()
+                pose = torch.cat((global_rotvec, relative_rotvec), dim=1) # (1, 53, 3)
+
+                smplx_output = smplx_layer(transl=transl,
+                                    pose=pose,
+                                    shape=shape,
+                                    K=torch.zeros((len(pose), 3, 3), device=device),  # dummy
+                                    expression=expression,
+                                    loc=None,
+                                    dist=None)
+                smplx_vertices_dict[human_name] = smplx_output['v3d'].detach().squeeze().cpu().numpy()
+            show_env_human_in_viser(world_env=total_output[output_name]['dust3r_ga'], world_scale_factor=1., smplx_vertices_dict=smplx_vertices_dict, smplx_faces=smplx_layer.bm_x.faces)
 
 
     # Save total output
