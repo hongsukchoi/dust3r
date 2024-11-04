@@ -1,6 +1,23 @@
 
 # Quick Commands
 
+**EgoHumans commands**
+
+Step 1. Run DUSt3R network inference on EgoHumans images. Currently, the cameras are fixed to `cam01`, `cam02`, `cam03`, `cam04`.
+```bash
+python hongsuk_egohumans_network_run_dust3r.py --output_path ./outputs/egohumans
+```
+
+Step 2. Run DUSt3R global alignment to initalize the camera poses and pointclouds.
+```bash
+python hongsuk_egohumans_dust3r_ga.py --dust3r_output_path ./outputs/egohumans/dust3r_network_output_30:11:10.pkl --output_path ./outputs/egohumans --egohumans_data_root /home/hongsuk/projects/egohumans/data --vis
+```
+
+Step 3. Run MultiHMR inference on EgoHumans images.
+```bash
+python hongsuk_egohumans_multihmr_inference.py --output_path ./outputs/egohumans --egohumans_data_root /home/hongsuk/projects/egohumans/data --vis
+```
+
 **DUSt3R commands** 
 
 Step 1. Run DUSt3R network inference on your images and save the outputs.
