@@ -35,6 +35,7 @@ total_output = {
 """
 
 import os
+import os.path as osp
 import numpy as np
 import copy
 import pickle
@@ -108,16 +109,21 @@ def parse_to_save_data(scene, cam_names, main_cam_idx=None):
         }
     return results
 
-def main(output_path: str = './outputs/egohumans', dust3r_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl', egohumans_data_root: str = '/home/hongsuk/projects/egohumans/data', vis: bool = False):
-    Path(output_path).mkdir(parents=True, exist_ok=True)
+def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # EgoHumans data
     # Fix batch size to 1 for now
-    cam_names = sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    dataset, dataloader = create_dataloader(egohumans_data_root, dust3r_output_path=dust3r_output_path, batch_size=1, split='test', subsample_rate=10, cam_names=cam_names)
+    selected_big_seq_list = ['07_tennis'] #['06_badminton'] #['03_fencing', '04_basketball', '05_volleyball'] #['01_tagging', '02_lego']
+    cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
+    num_of_cams = 4
+    output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', f'num_of_cams{num_of_cams}')
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
+    dataset, dataloader = create_dataloader(egohumans_data_root, dust3r_raw_output_dir=dust3r_raw_output_dir, batch_size=1, split='test', subsample_rate=10, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list)
 
     # Dust3r Config for the global alignment
-    mode = GlobalAlignerMode.PointCloudOptimizer if len(cam_names) > 2 else GlobalAlignerMode.PairViewer
+    mode = GlobalAlignerMode.PointCloudOptimizer if num_of_cams > 2 else GlobalAlignerMode.PairViewer
     device = 'cuda'
     silent = False
     schedule = 'linear'
@@ -131,56 +137,56 @@ def main(output_path: str = './outputs/egohumans', dust3r_output_path: str = '/h
     niter_PnP = 10
     min_conf_thr_for_pnp = 3
 
-    total_output = {}
     total_scene_num = len(dataset)
     print(f"Running global alignment for {total_scene_num} scenes")
     for i in tqdm.tqdm(range(total_scene_num), total=total_scene_num):
         sample = dataset.get_single_item(i)
-        output = sample['dust3r_network_output']
+        cam_names = sorted(sample['multiview_images'].keys())
 
+        output = sample['dust3r_network_output']
         scene = global_aligner(output, device=device, mode=mode, verbose=not silent, has_human_cue=has_human_cue)
 
         # initialize the scene parameters with the known poses or point clouds
-        if init == 'mst':
+        if mode == GlobalAlignerMode.PointCloudOptimizer and init == 'mst':
             scene.init_default_mst(niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
             print("Default MST init")
 
-        # define the adam optimizer
-        params = [p for p in scene.parameters() if p.requires_grad]
-        optimizer = torch.optim.Adam(params, lr=lr, betas=(0.9, 0.9))
+            # define the adam optimizer
+            params = [p for p in scene.parameters() if p.requires_grad]
+            optimizer = torch.optim.Adam(params, lr=lr, betas=(0.9, 0.9))
 
-        # Given the number of iterations, run the optimizer while forwarding the scene with the current parameters to get the loss
-        with tqdm.tqdm(total=niter) as bar:
-            while bar.n < bar.total:
-                lr = adjust_lr(bar.n, niter, lr_base, lr_min, optimizer, schedule)
-                optimizer.zero_grad()
-                loss = scene.dust3r_loss()
-                loss.backward()
-                optimizer.step()
+            # Given the number of iterations, run the optimizer while forwarding the scene with the current parameters to get the loss
+            with tqdm.tqdm(total=niter) as bar:
+                while bar.n < bar.total:
+                    lr = adjust_lr(bar.n, niter, lr_base, lr_min, optimizer, schedule)
+                    optimizer.zero_grad()
+                    loss = scene.dust3r_loss()
+                    loss.backward()
+                    optimizer.step()
 
-                bar.set_postfix_str(f'{lr=:g} loss={loss:g}')
-                bar.update()
-        print("final loss: ", loss)
+                    bar.set_postfix_str(f'{lr=:g} loss={loss:g}')
+                    bar.update()
+            print("final loss: ", loss)
 
         # Save output
-        output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"
-        total_output[output_name] = {}
-        total_output[output_name]['gt_cameras'] = sample['multiview_cameras']
-        total_output[output_name]['dust3r_ga'] = parse_to_save_data(scene, cam_names, 0)
-        
+        output_name = f"{sample['sequence']}_{sample['frame']}"
+        to_save_data = {}
+        to_save_data['gt_cameras'] = sample['multiview_cameras']
+        to_save_data['dust3r_ga'] = parse_to_save_data(scene, cam_names, 0)
+        to_save_data['img_names'] = (sample['sequence'], sample['frame'], cam_names)
+
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f'{output_name}.pkl')
+        print(f'Saving output to {output_path}')
+        with open(output_path, 'wb') as f:
+            pickle.dump(to_save_data, f)
+
         # visualize
         if vis:
             try:
-                show_env_in_viser(world_env=total_output[output_name]['dust3r_ga'], world_scale_factor=10., gt_cameras=total_output[output_name]['gt_cameras'])
+                show_env_in_viser(world_env=to_save_data['dust3r_ga'], world_scale_factor=10., gt_cameras=to_save_data['gt_cameras'])
             except:
                 pass
-
-
-    # Save total output
-    # get date and time (day:hour:minute) time in pacific time
-    now = datetime.now(pytz.timezone('US/Pacific')).strftime("%d:%H:%M")
-    with open(os.path.join(output_path, f'dust3r_ga_output_{now}.pkl'), 'wb') as f:
-        pickle.dump(total_output, f)
 
 if __name__ == '__main__':
     tyro.cli(main)

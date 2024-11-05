@@ -22,8 +22,11 @@ def main(output_path: str = './outputs/egohumans'):
 
     # EgoHumans data
     # Fix batch size to 1 for now
-    egohumans_data_root = '/home/hongsuk/projects/egohumans/data'
-    cam_names = sorted(['cam01', 'cam02', 'cam03', 'cam04'])
+    egohumans_data_root = './data/egohumans_data' #'/home/hongsuk/projects/egohumans/data'
+    cam_names = None # ['cam01', 'cam02', 'cam03', 'cam04']
+    num_of_cams = 6
+    output_dir = f'./outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
+
     dataset, dataloader = create_dataloader(egohumans_data_root, batch_size=1, split='test', subsample_rate=10, cam_names=cam_names)
 
     # Dust3r parameters
@@ -40,7 +43,10 @@ def main(output_path: str = './outputs/egohumans'):
 
     total_output = {}
     for i, sample in tqdm.tqdm(enumerate(dataloader), total=len(dataloader)):
+        cam_names = sorted(sample['multiview_images'].keys())
+
         imgs = [sample['multiview_images'][cam_name] for cam_name in cam_names]
+        affine_transforms = [sample['multiview_affine_transforms'][cam_name] for cam_name in cam_names]
 
         # for single view, make a pair with itself
         if len(imgs) == 1:
@@ -51,22 +57,17 @@ def main(output_path: str = './outputs/egohumans'):
         output = inference(pairs, model, device, batch_size=1, verbose=not silent)
 
         # Save output
-        output_name = f"{sample['sequence'][0]}_{sample['frame'][0].item()}_{''.join(cam_names)}"
-        # dust3r input image to original image transform; to be compatible with the outputs from different methods that use different input image sizes
-        affine_transforms = [sample['multiview_affine_transforms'][cam_name] for cam_name in cam_names]
-        total_output[output_name] = {
+        to_save_data = {
             'affine_matrices': affine_transforms,
             'output': output,
-            'img_names': cam_names
+            'img_names': (sample['sequence'], sample['frame'].tolist(), cam_names)
         }
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f'{sample["sequence"][0]}_{sample["frame"].item()}.pkl')
+        print(f'Saving output to {output_path}')
+        with open(output_path, 'wb') as f:
+            pickle.dump(to_save_data, f)
 
-
-    # Save total output
-    # get date and time (day:hour:minute)
-    # time in pacific time
-    now = datetime.now(pytz.timezone('US/Pacific')).strftime("%d:%H:%M")
-    with open(os.path.join(output_path, f'dust3r_network_output_{now}.pkl'), 'wb') as f:
-        pickle.dump(total_output, f)
 
 if __name__ == '__main__':
     tyro.cli(main)
