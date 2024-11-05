@@ -43,12 +43,17 @@ class EgoHumansDataset(Dataset):
             self.num_of_cams = len(cam_names)
 
         # choose only a few sequence for testing else all sequences
-        self.selected_small_seq_name_list = ['001_badminton']  # ex) ['001_tagging', '002_tagging']
+        # 048_badminton to 051_badminton
+        start_idx = 41#55#51
+        end_idx = 61#58#54
+        self.selected_small_seq_name_list = [f'{i:03d}_badminton' for i in range(start_idx, end_idx+1)]
+
+        # self.selected_small_seq_name_list = [] #'001_badminton']  # ex) ['001_tagging', '002_tagging']
         self.selected_big_seq_list = selected_big_seq_list # ex) ['01_tagging', '02_lego']
         # big sequence name dictionary
         self.big_seq_name_dict = {
             'tagging': '01_tagging',
-            'lego': '02_lego',
+            'legoassemble': '02_lego',
             'fencing': '03_fencing',
             'basketball': '04_basketball',
             'volleyball': '05_volleyball',  
@@ -101,8 +106,8 @@ class EgoHumansDataset(Dataset):
                         # Store the path
                         self.dust3r_ga_outputs[small_seq_name][frame] = dust3r_ga_output_path
 
-            # Setup the VitPose / HMR2 / HAMER outputs 
-            self.vitpose_hmr2_hamer_output_dir = '/scratch/one_month/current/lmueller/egohuman/camera_ready' #vitpose_hmr2_hamer_output_dir 
+        # Setup the VitPose / HMR2 / HAMER outputs 
+        self.vitpose_hmr2_hamer_output_dir = '/scratch/one_month/current/lmueller/egohuman/camera_ready' #vitpose_hmr2_hamer_output_dir 
 
 
         # Load multihmr output
@@ -151,7 +156,8 @@ class EgoHumansDataset(Dataset):
                     self.small_seq_list.append(small_seq_name)
                     self.small_seq_annot_list.append(os.path.join(small_seq, 'parsed_annot_hongsuk.pkl'))
                 except:
-                    print(f'Warning: loading annot for {small_seq}') # there is no smpl annot for this sequence
+                    print(f'Warning: loading annot for {small_seq} failed') # there is no smpl annot for this sequence
+        print(f'Successfully loaded annot for {len(self.small_seq_list)} sequences')
 
         """ Data Structure
         {
@@ -245,7 +251,8 @@ class EgoHumansDataset(Dataset):
                         continue
                 else:
                     if self.num_of_cams is None:
-                        raise ValueError('Both camera names and number of cameras are None')
+                        print('Warning: Both camera names and number of cameras are None... Using all available cameras')
+                        selected_cameras = sorted(per_frame_data['cameras'].keys())
                     else:
                         available_cameras = sorted(per_frame_data['cameras'].keys())
                         if len(available_cameras) < self.num_of_cams:
@@ -434,8 +441,6 @@ class EgoHumansDataset(Dataset):
         """ load image for Dust3r network inferences """
         multiview_images = {}
         img_path_list = [sample['annot_and_img_paths'][cam]['img_path'] for cam in selected_cameras]
-        # TEMP
-        # img_path_list = [img_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root) for img_path in img_path_list]
         dust3r_input_imgs = dust3r_load_images(img_path_list, size=self.dust3r_image_size, verbose=False)
 
         # squeeze the batch dimension for 'img' and 'true_shape'
@@ -494,17 +499,21 @@ class EgoHumansDataset(Dataset):
 
                 # Store annotations for this camera
                 # pose2d and bbox should always exist together, otherwise just not 2d annotation for that (camera, human) pair
+                human_names_from_pose2d_annot = set([pose2d_annot[i]['human_name'] for i in range(len(pose2d_annot))])
                 multiview_multiple_human_2d_cam_annot[camera_name] = defaultdict(dict)
                 if bbox_annot is not None:
                     for j in range(len(bbox_annot)):
                         human_name = bbox_annot[j]['human_name']
+                        if human_name not in human_names_from_pose2d_annot:
+                            continue
                         bbox = bbox_annot[j]['bbox']
                         multiview_multiple_human_2d_cam_annot[camera_name][human_name] = {'bbox': bbox}
-
+                
                 for j in range(len(pose2d_annot)):
                     human_name = pose2d_annot[j]['human_name']
-                    multiview_multiple_human_2d_cam_annot[camera_name][human_name] = {}
-                    if 'is_valid' not in pose2d_annot[j] or not pose2d_annot[j]['is_valid']:
+                    if human_name not in multiview_multiple_human_2d_cam_annot[camera_name]:
+                        multiview_multiple_human_2d_cam_annot[camera_name][human_name] = {}
+                    if pose2d_annot[j]['keypoints'].shape[0] != 133 or np.all(pose2d_annot[j]['keypoints'] == 0) or ('is_valid' in pose2d_annot[j] and not pose2d_annot[j]['is_valid']):
                         pose2d = None
                         del multiview_multiple_human_2d_cam_annot[camera_name][human_name] 
                         continue # just don't use this human
@@ -538,6 +547,7 @@ class EgoHumansDataset(Dataset):
 
         """ load 2D pose and 3D mesh predictions for human optimization later; Predicted parameters """
         multiview_multiple_human_2d_cam_pred = {}
+
         for camera_name in selected_cameras:
             # multiview_multiple_human_2d_cam_pred[camera_name] = {}
             # vit 2d pose pred path
@@ -546,13 +556,20 @@ class EgoHumansDataset(Dataset):
             with open(mono_multiple_human_2d_cam_pred_path, 'rb') as f:
                 mono_multiple_human_2d_cam_pred_pose = pickle.load(f)
             # the saved frame keys are 1-indexed following the image names
+            if f'{frame+1:05d}' not in mono_multiple_human_2d_cam_pred_pose.keys():
+                print(f'Warning: no vitpose 2d pose pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
+                continue
             mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[f'{frame+1:05d}'] # (N, 133, 2+1)
+
 
             # load 2d bbox pred path
             mono_multiple_human_2d_cam_pred_bbox_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__bbox_with_score_used.pkl')
             with open(mono_multiple_human_2d_cam_pred_bbox_path, 'rb') as f:
                 mono_multiple_human_2d_cam_pred_bbox = pickle.load(f)
             # the saved frame keys are 1-indexed following the image names
+            if f'{frame+1:05d}' not in mono_multiple_human_2d_cam_pred_bbox.keys():
+                print(f'Warning: no bbox pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
+                continue
             mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[f'{frame+1:05d}'] # (N, 4+1)
 
             # 3d mesh annot path
@@ -561,6 +578,9 @@ class EgoHumansDataset(Dataset):
             with open(mono_multiple_human_3d_cam_pred_path, 'rb') as f:
                 mono_multiple_human_3d_cam_pred = pickle.load(f)
             # the saved frame keys are 1-indexed following the image names
+            if f'{frame+1:05d}' not in mono_multiple_human_3d_cam_pred.keys():
+                print(f'Warning: no hmr2_hamer 3d mesh pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
+                continue
             mono_multiple_human_3d_cam_pred = mono_multiple_human_3d_cam_pred[f'{frame+1:05d}']['params'] # dictionary of human parameters 
 
             assert len(mono_multiple_human_2d_cam_pred_pose) == len(mono_multiple_human_2d_cam_pred_bbox) == len(mono_multiple_human_3d_cam_pred['body_pose']), "The number of 2D pose predictions, 2D bbox predictions, and 3D mesh predictions should match!"
@@ -597,21 +617,31 @@ class EgoHumansDataset(Dataset):
             multiple_human_2d_cam_annot_human_names = sorted(list(multiview_multiple_human_2d_cam_annot[camera_name].keys()))
             multiple_human_2d_cam_annot_pose2d = np.array([multiview_multiple_human_2d_cam_annot[camera_name][human_name]['pose2d'] for human_name in multiple_human_2d_cam_annot_human_names])
             multiple_human_2d_cam_annot_bbox = np.array([multiview_multiple_human_2d_cam_annot[camera_name][human_name]['bbox'] for human_name in multiple_human_2d_cam_annot_human_names])
-
+           
             # Use bbox to assign human names to the predictions
             mono_pred_human_names = assign_human_names_to_mono_predictions(mono_multiple_human_2d_cam_pred_bbox, multiple_human_2d_cam_annot_bbox, 
                                                                            mono_multiple_human_2d_cam_pred_pose, multiple_human_2d_cam_annot_pose2d, \
                                                                            multiple_human_2d_cam_annot_human_names, \
                                                                            self.egohumans_image_size_tuple, \
-                                                                           cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
+                                                                        #    cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
                                                                            ) 
             mono_pred_output_dict = {mono_pred_human_names[i]: 
                                     {
+                                        'original_index_in_mono_vitpose_pred': unique_mono_pred_indices[i],
                                         'pose2d': mono_multiple_human_2d_cam_pred_pose[i],
                                         'bbox': mono_multiple_human_2d_cam_pred_bbox[i],
                                         'params': {key: mono_multiple_human_3d_cam_pred[key][i] for key in mono_multiple_human_3d_cam_pred.keys()}
                                     } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
             multiview_multiple_human_2d_cam_pred[camera_name] = mono_pred_output_dict
+
+            # SAVE_DIR
+            mono_multiple_human_sanitized_save_dir = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', 'identified_predictions')
+            if not os.path.exists(mono_multiple_human_sanitized_save_dir):
+                os.makedirs(mono_multiple_human_sanitized_save_dir)
+            mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
+            with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
+                pickle.dump(mono_pred_output_dict, f)
+            print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
 
         """ get MultiHMR output; Predicted parameters """
         if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None and self.multihmr_output_path is not None:
@@ -812,7 +842,7 @@ def assign_human_names_to_mono_predictions(pred_bboxes, gt_bboxes, pred_poses2d,
             if iou > 0.05:
                 cost_matrix[i, j] = dist
             else:
-                cost_matrix[i, j] = float('inf')
+                cost_matrix[i, j] = float(1e+10) # float('inf')
 
     # Run Hungarian algorithm to find optimal assignment
     # cost_matrix: np.ndarray shape (M, N)
@@ -827,10 +857,9 @@ def assign_human_names_to_mono_predictions(pred_bboxes, gt_bboxes, pred_poses2d,
         c = col_indices[idx]
         pred_human_names[r] = gt_human_names[c]
 
-    # pred_bboxes_human_names = [gt_human_names[j] for j in col_indices]
-    for i in range(len(pred_human_names)):
-        if pred_human_names[i] is not None:
-            print(f'For camera {cam_name}, predicted index: {i}, assigned egohumans human name: {pred_human_names[i]}')
+    # for i in range(len(pred_human_names)):
+    #     if pred_human_names[i] is not None:
+    #         print(f'For camera {cam_name}, predicted index: {i}, assigned egohumans human name: {pred_human_names[i]}')
 
     # Optionally visualize the matches
     if img_path != '':
@@ -1075,14 +1104,16 @@ if __name__ == '__main__':
     # multihmr_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl'
     # dataset, dataloader = create_dataloader(data_root, dust3r_output_path=dust3r_output_path, dust3r_ga_output_path=dust3r_ga_output_path, multihmr_output_path=multihmr_output_path, batch_size=1, split='test', num_workers=0)
     
-    num_of_cams = 4
+    # ['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing']
+    selected_big_seq_list = ['06_badminton']# ['5_volleyball', '04_basketball'] # ['01_tagging', '02_lego', '03_fencing'] -> might stop because of scipy infinity bug  #['07_tennis'] -> might stop because of scipy infinity bug
+    num_of_cams = None
     data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
-    dust3r_output_dir = f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
-    dust3r_ga_output_dir = f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
-    dataset, dataloader = create_dataloader(data_root, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0)
+    dust3r_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
+    dust3r_ga_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
+    dataset, dataloader = create_dataloader(data_root, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0, selected_big_seq_list=selected_big_seq_list)
 
     dataset_len = len(dataset)
-    step = 2
+    step = 1
     for i in tqdm(range(0, dataset_len, step)):
         item = dataset.get_single_item(i)
 

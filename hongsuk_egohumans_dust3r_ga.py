@@ -116,7 +116,7 @@ def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = 
     # Fix batch size to 1 for now
     selected_big_seq_list = ['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    num_of_cams = 6
+    num_of_cams = 4
     output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', f'num_of_cams{num_of_cams}')
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
