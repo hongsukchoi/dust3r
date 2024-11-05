@@ -10,7 +10,7 @@ import glob
 import PIL
 from PIL import Image, ImageOps
 import pickle
-
+from collections import defaultdict
 from dust3r.utils.image import load_images as dust3r_load_images
 from multihmr.utils import normalize_rgb, get_focalLength_from_fieldOfView
 from multihmr.utils import get_smplx_joint_names
@@ -31,6 +31,7 @@ class EgoHumansDataset(Dataset):
         self.split = split
         self.dust3r_image_size = 512
         self.multihmr_image_size = 896
+        self.egohumans_image_size_tuple = (2160, 3840) # (height, width)
         self.subsample_rate = subsample_rate
 
         # choose camera names
@@ -492,67 +493,125 @@ class EgoHumansDataset(Dataset):
                     bbox_annot = None
 
                 # Store annotations for this camera
-                multiview_multiple_human_2d_cam_annot[camera_name] = {}
-                import pdb; pdb.set_trace()
-                for human_idx in range(len(pose2d_annot)):
-                    # ??
-                    # change and to or.
-                    # Or use smpl gt projection for the association...
-                    if 'is_valid' in pose2d_annot[human_idx] and not pose2d_annot[human_idx]['is_valid']:
-                        continue
+                # pose2d and bbox should always exist together, otherwise just not 2d annotation for that (camera, human) pair
+                multiview_multiple_human_2d_cam_annot[camera_name] = defaultdict(dict)
+                if bbox_annot is not None:
+                    for j in range(len(bbox_annot)):
+                        human_name = bbox_annot[j]['human_name']
+                        bbox = bbox_annot[j]['bbox']
+                        multiview_multiple_human_2d_cam_annot[camera_name][human_name] = {'bbox': bbox}
 
-                    human_name = pose2d_annot[human_idx]['human_name']
-                    pose2d = pose2d_annot[human_idx]['keypoints']
-                    if bbox_annot is not None:
-                        bbox = bbox_annot[human_idx]['bbox']
+                for j in range(len(pose2d_annot)):
+                    human_name = pose2d_annot[j]['human_name']
+                    multiview_multiple_human_2d_cam_annot[camera_name][human_name] = {}
+                    if 'is_valid' not in pose2d_annot[j] or not pose2d_annot[j]['is_valid']:
+                        pose2d = None
+                        del multiview_multiple_human_2d_cam_annot[camera_name][human_name] 
+                        continue # just don't use this human
                     else:
-                        bbox = pose2d_annot[human_idx]['bbox']
-                    
-                    multiview_multiple_human_2d_cam_annot[camera_name][human_name] = {
-                        'pose2d': pose2d,
-                        'bbox': bbox
-                    }
+                        pose2d = pose2d_annot[j]['keypoints']
+                        multiview_multiple_human_2d_cam_annot[camera_name][human_name] = {'pose2d': pose2d}
+                        if 'bbox' not in multiview_multiple_human_2d_cam_annot[camera_name][human_name]:
+                            multiview_multiple_human_2d_cam_annot[camera_name][human_name]['bbox'] = pose2d_annot[j]['bbox']
+
+                # Visualize the groundtruth 2D annotations per camera view per human
+                # for human_name, annot in multiview_multiple_human_2d_cam_annot[camera_name].items():
+                #     img = cv2.imread(img_path) # visualize the groundtruth keypoints and bboxes
+
+                #     bbox = annot['bbox']
+                #     pose2d = annot['pose2d']
+
+                #     # Draw bounding box and keypoints on the image with human name
+                #     if bbox is not None:
+                #         x1, y1, x2, y2, conf = bbox
+                #         img = cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                #         # Put human name text above bbox
+                #         cv2.putText(img, human_name, (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                
+                #     # Draw 2D keypoints
+                #     if pose2d is not None:
+                #         # Draw all keypoints
+                #         for kp_idx in range(pose2d.shape[0]):
+                #             x, y, conf = pose2d[kp_idx]
+                #             img = cv2.circle(img, (int(x), int(y)), 2, (255, 0, 0), -1)
+                #     cv2.imwrite(f'{camera_name}_{os.path.basename(img_path)[:-4]}_gt_keypoints_{human_name}.png', img)
 
         """ load 2D pose and 3D mesh predictions for human optimization later; Predicted parameters """
         multiview_multiple_human_2d_cam_pred = {}
         for camera_name in selected_cameras:
-            multiview_multiple_human_2d_cam_pred[camera_name] = {}
+            # multiview_multiple_human_2d_cam_pred[camera_name] = {}
             # vit 2d pose pred path
             # '/scratch/one_month/current/lmueller/egohuman/camera_ready/01_tagging/001_tagging/processed_data/humanwithhand/cam01/__vitpose.pkl
-            multiview_multiple_human_2d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__vitpose.pkl')
-            with open(multiview_multiple_human_2d_cam_pred_path, 'rb') as f:
-                multiview_multiple_human_2d_cam_pred_pose = pickle.load(f)
+            mono_multiple_human_2d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__vitpose.pkl')
+            with open(mono_multiple_human_2d_cam_pred_path, 'rb') as f:
+                mono_multiple_human_2d_cam_pred_pose = pickle.load(f)
             # the saved frame keys are 1-indexed following the image names
-            multiview_multiple_human_2d_cam_pred_pose = multiview_multiple_human_2d_cam_pred_pose[f'{frame+1:05d}'] # (N, 133, 2+1)
+            mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[f'{frame+1:05d}'] # (N, 133, 2+1)
 
             # load 2d bbox pred path
-            multiview_multiple_human_2d_cam_pred_bbox_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__bbox_with_score_used.pkl')
-            with open(multiview_multiple_human_2d_cam_pred_bbox_path, 'rb') as f:
-                multiview_multiple_human_2d_cam_pred_bbox = pickle.load(f)
+            mono_multiple_human_2d_cam_pred_bbox_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__bbox_with_score_used.pkl')
+            with open(mono_multiple_human_2d_cam_pred_bbox_path, 'rb') as f:
+                mono_multiple_human_2d_cam_pred_bbox = pickle.load(f)
             # the saved frame keys are 1-indexed following the image names
-            multiview_multiple_human_2d_cam_pred_bbox = multiview_multiple_human_2d_cam_pred_bbox[f'{frame+1:05d}'] # (N, 4+1)
+            mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[f'{frame+1:05d}'] # (N, 4+1)
 
             # 3d mesh annot path
             #  '/scratch/one_month/current/lmueller/egohuman/camera_ready/01_tagging/001_tagging/processed_data/humanwithhand/cam01/__hmr2_hamer_smplx.pkl'
-            multiview_multiple_human_3d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__hmr2_hamer_smplx.pkl')
-            with open(multiview_multiple_human_3d_cam_pred_path, 'rb') as f:
-                multiview_multiple_human_3d_cam_pred = pickle.load(f)
+            mono_multiple_human_3d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__hmr2_hamer_smplx.pkl')
+            with open(mono_multiple_human_3d_cam_pred_path, 'rb') as f:
+                mono_multiple_human_3d_cam_pred = pickle.load(f)
             # the saved frame keys are 1-indexed following the image names
-            multiview_multiple_human_3d_cam_pred = multiview_multiple_human_3d_cam_pred[f'{frame+1:05d}']['params'] # dictionary of human parameters 
+            mono_multiple_human_3d_cam_pred = mono_multiple_human_3d_cam_pred[f'{frame+1:05d}']['params'] # dictionary of human parameters 
+
+            assert len(mono_multiple_human_2d_cam_pred_pose) == len(mono_multiple_human_2d_cam_pred_bbox) == len(mono_multiple_human_3d_cam_pred['body_pose']), "The number of 2D pose predictions, 2D bbox predictions, and 3D mesh predictions should match!"
+            # sanitize the mono predictions by comparing the 2D keypoints. Do NMS on the 2D keypoints and return the unique indices for the list
+            unique_mono_pred_indices = nms_unique_pose2d_indices(mono_multiple_human_2d_cam_pred_pose)
+            mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[unique_mono_pred_indices]
+            mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[unique_mono_pred_indices]
+            mono_multiple_human_3d_cam_pred = {key: mono_multiple_human_3d_cam_pred[key][unique_mono_pred_indices] for key in mono_multiple_human_3d_cam_pred.keys()}
+
+            # Visualization of pose2d and bbox predictions
+            # pred_pose2d = mono_multiple_human_2d_cam_pred_pose
+            # # Draw predicted keypoints in green
+            # img_path = sample['annot_and_img_paths'][camera_name]['img_path']
+            # img = cv2.imread(img_path)
+            # for i in range(len(pred_pose2d)):
+            #     pred = pred_pose2d[i]
+            #     # Draw index and assigned name
+            #     img = cv2.putText(img, f"{i}", 
+            #                     (int(pred[0, 0]), int(pred[0, 1])), 
+            #                     cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
+            #     # Draw keypoints
+            #     for kp in pred:
+            #         if kp[2] > 0:  # Only draw if confidence > 0
+            #             img = cv2.circle(img, (int(kp[0]), int(kp[1])), 3, (0, 255, 0), -1)
+
+            #     # draw bbox
+            #     x1, y1, x2, y2, conf = mono_multiple_human_2d_cam_pred_bbox[i]
+            #     img = cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+            # # save the image with the predicted keypoints
+            # file_name = os.path.basename(img_path)[:-4]
+            # cv2.imwrite(f'{camera_name}_{file_name}_pred_keypoints.png', img)
 
             # assign the human names to the 2d pose, 2d bbox, and 3d mesh predictions by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
-            this_cam_human_names = sorted(list(multiview_multiple_human_2d_cam_annot[camera_name].keys()))
-            this_cam_2d_annot = [multiview_multiple_human_2d_cam_annot[camera_name][human_name]['pose2d'] for human_name in this_cam_human_names]
+            multiple_human_2d_cam_annot_human_names = sorted(list(multiview_multiple_human_2d_cam_annot[camera_name].keys()))
+            multiple_human_2d_cam_annot_pose2d = np.array([multiview_multiple_human_2d_cam_annot[camera_name][human_name]['pose2d'] for human_name in multiple_human_2d_cam_annot_human_names])
+            multiple_human_2d_cam_annot_bbox = np.array([multiview_multiple_human_2d_cam_annot[camera_name][human_name]['bbox'] for human_name in multiple_human_2d_cam_annot_human_names])
 
-            import pdb; pdb.set_trace()
-            mono_pred_human_names = assign_human_names_to_mono_predictions(multiview_multiple_human_2d_cam_pred_pose, this_cam_2d_annot, this_cam_human_names, sample['annot_and_img_paths'][camera_name]['img_path']) 
+            # Use bbox to assign human names to the predictions
+            mono_pred_human_names = assign_human_names_to_mono_predictions(mono_multiple_human_2d_cam_pred_bbox, multiple_human_2d_cam_annot_bbox, 
+                                                                           mono_multiple_human_2d_cam_pred_pose, multiple_human_2d_cam_annot_pose2d, \
+                                                                           multiple_human_2d_cam_annot_human_names, \
+                                                                           self.egohumans_image_size_tuple, \
+                                                                           cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
+                                                                           ) 
             mono_pred_output_dict = {mono_pred_human_names[i]: 
                                     {
-                                        'pose2d': multiview_multiple_human_2d_cam_pred_pose[i],
-                                        'bbox': multiview_multiple_human_2d_cam_pred_bbox[i],
-                                        'params': {key: multiview_multiple_human_3d_cam_pred[key][i] for key in multiview_multiple_human_3d_cam_pred.keys()}
-                                    } for i in range(len(mono_pred_human_names))}
-
+                                        'pose2d': mono_multiple_human_2d_cam_pred_pose[i],
+                                        'bbox': mono_multiple_human_2d_cam_pred_bbox[i],
+                                        'params': {key: mono_multiple_human_3d_cam_pred[key][i] for key in mono_multiple_human_3d_cam_pred.keys()}
+                                    } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
+            multiview_multiple_human_2d_cam_pred[camera_name] = mono_pred_output_dict
 
         """ get MultiHMR output; Predicted parameters """
         if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None and self.multihmr_output_path is not None:
@@ -576,7 +635,7 @@ class EgoHumansDataset(Dataset):
         #     mapping from cropped to original image coordinates
         # - multiview_multiple_human_2d_cam_annot: Dict[camera_name -> Dict[human_name -> Dict]] containing 2D annotations
         #     - pose2d: 2D keypoint coordinates, np array shape (133, 2+1), x, y, confidence
-        #     - bbox: Bounding box coordinates, np array shape (4+1, ), x, y, w, h, confidence
+        #     - bbox: Bounding box coordinates, np array shape (4+1, ), x1, y1, x2, y2, confidence
 
         # - world_multiple_human_3d_annot: Dict[human_name -> Dict] containing 3D world smpl parameters, this is for evaluation, you can put GT 3D joints here instead
         # - camera_parameters: Dict[camera_name -> Dict] containing camera parameters
@@ -628,83 +687,187 @@ def vec_image_from_cam(intrinsics, point_3d, eps=1e-9):
 
     return point_2d
 
+def nms_unique_pose2d_indices(pose2d, threshold=30):
+    # threshold: pixel distance threshold
+    # pose2d is a list of np.ndarray shape (133, 2+1)
+    # do NMS on the 2D keypoints and return the unique indices for the list
+    # compare the pose pairs by the euclidean distance between the 2D keypoints and remove the duplicate predictions
+    # return the unique indices
+    if len(pose2d) <= 1:
+        return np.arange(len(pose2d))
+    
+    # Convert list of arrays to single array for easier indexing
+    pose2d = np.array(pose2d)  # (N, 133, 3)
+    
+    # Get valid keypoints mask based on confidence
+    valid_mask = pose2d[..., 2] > 0  # (N, 133)
+    
+    # Calculate pairwise distances between all poses
+    N = len(pose2d)
+    distances = np.zeros((N, N))
+    
+    for i in range(N):
+        for j in range(i+1, N):
+            # Get common valid keypoints between pose pairs
+            common_valid = valid_mask[i] & valid_mask[j]  # (133,)
+            
+            if not np.any(common_valid):
+                # If no common valid keypoints, set large distance
+                distances[i,j] = distances[j,i] = float('inf')
+                continue
+                
+            # Calculate mean euclidean distance between valid keypoints
+            pose_i = pose2d[i, common_valid, :2]  # (K, 2) 
+            pose_j = pose2d[j, common_valid, :2]  # (K, 2)
+            dist = np.mean(np.sqrt(np.sum((pose_i - pose_j)**2, axis=1)))
+            distances[i,j] = distances[j,i] = dist
+    
+    # Do NMS - keep poses that are far enough from each other
+    keep_indices = []
+    remaining = list(range(N))
+    
+    while remaining:
+        # Get pose with highest average confidence
+        confs = [np.mean(pose2d[i, valid_mask[i], 2]) for i in remaining]
+        idx = remaining[np.argmax(confs)]
+        keep_indices.append(idx)
+        
+        # Remove poses that are too close
+        remaining = [j for j in remaining if distances[idx,j] > threshold]
+    
+    return np.array(keep_indices)
 
-# assign human names to the mono predictions by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
-def assign_human_names_to_mono_predictions(pred_pose2d, gt_pose2d, gt_human_names, img_path=''):
+
+# assign human names to the mono predictions by associating the predicted bboxes with the Egohuman dataset bboxes
+def compute_iou(bbox1, bbox2):
+    # bbox1, bbox2: np.ndarray shape (4+1, ), 
+    # each bbox: x1, y1, x2, y2, conf
+    # return the IoU between the two bboxes
+    
+    # Get coordinates
+    x1_1, y1_1, x2_1, y2_1 = bbox1[:4]
+    x1_2, y1_2, x2_2, y2_2 = bbox2[:4]
+    
+    # Calculate intersection coordinates
+    x1_i = max(x1_1, x1_2)
+    y1_i = max(y1_1, y1_2) 
+    x2_i = min(x2_1, x2_2)
+    y2_i = min(y2_1, y2_2)
+    
+    # Calculate areas
+    area_1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+    area_2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+    
+    # Calculate intersection area
+    if x2_i < x1_i or y2_i < y1_i:
+        # No intersection
+        return 0.0
+        
+    area_i = (x2_i - x1_i) * (y2_i - y1_i)
+    
+    # Calculate union area
+    area_u = area_1 + area_2 - area_i
+    
+    # Return IoU
+    return area_i / area_u
+
+def assign_human_names_to_mono_predictions(pred_bboxes, gt_bboxes, pred_poses2d, gt_poses2d, gt_human_names, img_size, cam_name='', img_path=''):
     """
-    Assign human names to predicted poses by matching them with ground truth poses
+    Assign human names to predicted bboxes by matching them with ground truth bboxes
     
     Args:
-        pred_pose2d: np.ndarray shape (N, 133, 3) - predicted 2D keypoints with confidence
-        gt_pose2d: list of np.ndarray shape (133, 3) - ground truth 2D keypoints with confidence 
-        gt_human_names: list of human names matching gt_pose2d order
+        pred_bboxes: np.ndarray shape (M, 4+1) - predicted bboxes
+        gt_bboxes: np.ndarray shape (N, 4+1) - ground truth bboxes
+        pred_poses2d: np.ndarray shape (M, 133, 2+1) - predicted 2D keypoints
+        gt_poses2d: np.ndarray shape (N, 133, 2+1) - ground truth 2D keypoints
+        gt_human_names: length N list of human names matching gt_bboxes order
+        img_size: tuple of (height, width)
         img_path: optional path to save visualization
     
     Returns:
-        pred_pose2d_human_names: list of human names matching pred_pose2d order
+        pred_bboxes_human_names: list of human names matching pred_bboxes order
     """
-    assert len(gt_pose2d) == len(gt_human_names), "Number of GT poses must match number of human names"
+    assert len(gt_bboxes) == len(gt_human_names), "Number of GT bboxes must match number of human names"
     
     # Convert predictions to list if numpy array
-    if isinstance(pred_pose2d, np.ndarray):
-        pred_pose2d = [pred_pose2d[i] for i in range(len(pred_pose2d))]
+    if isinstance(pred_bboxes, np.ndarray):
+        pred_bboxes = [pred_bboxes[i] for i in range(len(pred_bboxes))]
 
     # Build cost matrix for Hungarian algorithm
-    cost_matrix = np.zeros((len(pred_pose2d), len(gt_pose2d)))
-    for i, pred in enumerate(pred_pose2d):
-        for j, gt in enumerate(gt_pose2d):
-            # Weight distances by confidence scores from both prediction and ground truth
-            confidence_weights = pred[:, 2] * gt[:, 2]
-            # Compute weighted Euclidean distance between corresponding keypoints
-            distances = np.sqrt(np.sum((pred[:, :2] - gt[:, :2])**2, axis=1))
-            cost_matrix[i, j] = np.sum(confidence_weights * distances)
-            # cost_matrix[i, j] = np.sum(distances)
+    cost_matrix = np.zeros((len(pred_bboxes), len(gt_bboxes)))
+    for i in range(len(pred_bboxes)):
+        for j in range(len(gt_bboxes)):
+            # confidence weights are the product of the confidence scores of the predicted and ground truth bboxes
+            # confidence_weights = pred[4] * gt[4] # these are corrupted...
+            # compute the IoU between the predicted and ground truth bboxes
+            iou = compute_iou(pred_bboxes[i], gt_bboxes[j])
+            
+            # compute the euclidean distance between the predicted and ground truth 2D keypoints
+            dist = np.sum(pred_poses2d[i, :, 2] * gt_poses2d[j, :, 2] * np.sqrt(np.sum((pred_poses2d[i, :, :2] - gt_poses2d[j, :, :2])**2, axis=1)))
+            
+            # normalize the distance by the size of the image
+            img_area = img_size[0] * img_size[1]
+            dist = dist / np.sqrt(img_area)
+
+            if iou > 0.05:
+                cost_matrix[i, j] = dist
+            else:
+                cost_matrix[i, j] = float('inf')
+
     # Run Hungarian algorithm to find optimal assignment
+    # cost_matrix: np.ndarray shape (M, N)
+    # maximize the cost_matrix to find the optimal assignment
+    # row_indices, col_indices = linear_sum_assignment(cost_matrix, maximize=True)
     row_indices, col_indices = linear_sum_assignment(cost_matrix)
 
     # Assign human names based on matching
-    pred_pose2d_human_names = [gt_human_names[j] for j in col_indices]
-    for i in range(len(pred_pose2d_human_names)):
-        print(f'predicted index: {i}, assigned egohumans human name: {pred_pose2d_human_names[i]}')
+    pred_human_names = [None] * len(pred_bboxes)
+    for idx in range(len(row_indices)): # len(row_indices) == len(col_indices
+        r = row_indices[idx]
+        c = col_indices[idx]
+        pred_human_names[r] = gt_human_names[c]
 
+    # pred_bboxes_human_names = [gt_human_names[j] for j in col_indices]
+    for i in range(len(pred_human_names)):
+        if pred_human_names[i] is not None:
+            print(f'For camera {cam_name}, predicted index: {i}, assigned egohumans human name: {pred_human_names[i]}')
 
     # Optionally visualize the matches
-    if img_path:
-        
+    if img_path != '':
+        output_dir = './inspect_egohumans_reid'
+        os.makedirs(output_dir, exist_ok=True)
         # Draw predicted keypoints in green
         img = cv2.imread(img_path)
-        for i in range(len(pred_pose2d_human_names)):
-            pred = pred_pose2d[i]
-            # Draw index and assigned name
-            img = cv2.putText(img, f"{i}:{pred_pose2d_human_names[i]}", 
-                            (int(pred[0, 0]), int(pred[0, 1])), 
+        for i in range(len(pred_human_names)):
+            if pred_human_names[i] is not None:
+                pred = pred_bboxes[i]
+                # Draw index and assigned name
+                img = cv2.putText(img, f"{i}:{pred_human_names[i]}", 
+                            (int(pred[0] - 10), int(pred[1] - 10)), 
                             cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
-            # Draw keypoints
-            for kp in pred:
-                if kp[2] > 0:  # Only draw if confidence > 0
-                    img = cv2.circle(img, (int(kp[0]), int(kp[1])), 3, (0, 255, 0), -1)
-        # save the image with the predicted keypoints
+                # Draw bbox
+                img = cv2.rectangle(img, (int(pred[0]), int(pred[1])), (int(pred[2]), int(pred[3])), (0, 255, 0), 2)
+
+        # save the image with the predicted bboxes
         file_name = os.path.basename(img_path)[:-4]
-        cv2.imwrite(f'{file_name}_pred_matching.png', img)
+        seq_name = img_path.split('/')[-5]
+        cv2.imwrite(os.path.join(output_dir, f'{seq_name}_{cam_name}_{file_name}_pred_matching.png'), img)
 
         # Draw ground truth keypoints in red
         img = cv2.imread(img_path)   
-        for i, gt in enumerate(gt_pose2d):
-            # Draw ground truth keypoints in red
+        for i, gt in enumerate(gt_bboxes):
             # Draw index and name
             img = cv2.putText(img, f"{i}:{gt_human_names[i]}", 
-                            (int(gt[0, 0]), int(gt[0, 1])), 
+                            (int(gt[0] - 10), int(gt[1] - 10)), 
                             cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
-            # Draw keypoints
-            for kp in gt:
-                if kp[2] > 0:  # Only draw if confidence > 0
-                    img = cv2.circle(img, (int(kp[0]), int(kp[1])), 3, (0, 0, 255), -1)
+            # Draw bbox
+            img = cv2.rectangle(img, (int(gt[0]), int(gt[1])), (int(gt[2]), int(gt[3])), (0, 0, 255), 2)
         
         file_name = os.path.basename(img_path)[:-4]
-        cv2.imwrite(f'{file_name}_gt_matching.png', img)
+        seq_name = img_path.split('/')[-5]
+        cv2.imwrite(os.path.join(output_dir, f'{seq_name}_{cam_name}_{file_name}_gt_matching.png'), img)
 
-    import pdb; pdb.set_trace()
-    return pred_pose2d_human_names
+    return pred_human_names
 
 # assign human names to the multihmr output by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
 def assign_human_names_to_multihmr_output(multihmr_affine_matrix, multihmr_2d_pred_list, egohumans_2d_annot_list, egohumans_human_names, img_path=''):
@@ -764,6 +927,7 @@ def assign_human_names_to_multihmr_output(multihmr_affine_matrix, multihmr_2d_pr
     row_indices, col_indices = linear_sum_assignment(cost_matrix)
 
     # assign the human names to the multihmr output
+    # THIS IS WRONG - Hongsuk!@!!!!!!!!f Why don't you use the row indices?
     multihmr_output_human_names = [egohumans_human_names[j] for j in col_indices]
     # print the index of multihmr output and its assigned egohumans human name
     # for i in range(len(multihmr_output_human_names)):
@@ -904,6 +1068,7 @@ def create_dataloader(data_root, dust3r_raw_output_dir=None, dust3r_ga_output_di
 
 
 if __name__ == '__main__':
+    from tqdm import tqdm
     # data_root = '/home/hongsuk/projects/egohumans/data'
     # dust3r_output_path =  '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl'
     # dust3r_ga_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_02:20:29.pkl'
@@ -916,7 +1081,8 @@ if __name__ == '__main__':
     dust3r_ga_output_dir = f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
     dataset, dataloader = create_dataloader(data_root, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0)
 
-    item = dataset.get_single_item(0)
-    # for data in dataloader:
-    #     import pdb; pdb.set_trace()
-    #     break
+    dataset_len = len(dataset)
+    step = 2
+    for i in tqdm(range(0, dataset_len, step)):
+        item = dataset.get_single_item(i)
+
