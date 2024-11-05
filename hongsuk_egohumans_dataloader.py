@@ -18,12 +18,12 @@ from multihmr.utils import get_smplx_joint_names
 from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, SMPLX_JOINT_NAMES
 
 class EgoHumansDataset(Dataset):
-    def __init__(self, data_root, dust3r_raw_output_dir=None, dust3r_ga_output_path=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[]):
+    def __init__(self, data_root, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[]):
         """
         Args:
             data_root (str): Root directory of the dataset
             dust3r_raw_output_dir (str): Directory to the dust3r raw outputs
-            dust3r_ga_output_path (str): Path to the dust3r global alignment output
+            dust3r_ga_output_dir (str): Directory to the dust3r global alignment outputs
             multihmr_output_path (str): Path to the multihmr output
             split (str): 'train', 'val', or 'test'
         """
@@ -42,8 +42,18 @@ class EgoHumansDataset(Dataset):
             self.num_of_cams = len(cam_names)
 
         # choose only a few sequence for testing else all sequences
-        self.selected_small_seq_name_list = []  # ex) ['001_tagging', '002_tagging']
+        self.selected_small_seq_name_list = ['001_badminton']  # ex) ['001_tagging', '002_tagging']
         self.selected_big_seq_list = selected_big_seq_list # ex) ['01_tagging', '02_lego']
+        # big sequence name dictionary
+        self.big_seq_name_dict = {
+            'tagging': '01_tagging',
+            'lego': '02_lego',
+            'fencing': '03_fencing',
+            'basketball': '04_basketball',
+            'volleyball': '05_volleyball',  
+            'badminton': '06_badminton',
+            'tennis': '07_tennis',
+        }
 
         # Load dust3r network output
         self.dust3r_raw_output_dir = dust3r_raw_output_dir
@@ -53,8 +63,11 @@ class EgoHumansDataset(Dataset):
             dust3r_raw_files = sorted(glob.glob(os.path.join(self.dust3r_raw_output_dir, '*.pkl')))
             
             for file_path in dust3r_raw_files:
-                # Get filename without extension
+                # Get filename without extension; ex) 001_badminton_0.pkl
                 filename = os.path.basename(file_path).replace('.pkl', '')
+                if self.selected_small_seq_name_list != [] and '_'.join(filename.split('_')[:-1]) not in self.selected_small_seq_name_list:
+                    continue
+                
                 # Split filename into sequence and frame
                 seq_parts = filename.split('_')
                 small_seq_name = '_'.join(seq_parts[:2])  # e.g. '001_badminton'
@@ -68,23 +81,32 @@ class EgoHumansDataset(Dataset):
                 self.dust3r_raw_outputs[small_seq_name][frame] = file_path
                 
 
-        """ > Structure + Humans + Cameras optimization - Hongsuk (optional): """
-        # Load dust3r global alignment output
-        self.dust3r_ga_output_path = dust3r_ga_output_path
-        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_path is not None:
-            dust3r_ga_output = pickle.load(open(self.dust3r_ga_output_path, 'rb'))
-            self.dust3r_ga_output = {} # {output_name: output}
-            no_ga_output_names = []
-            for output_name in self.dust3r_raw_outputs.keys():
-                if output_name not in dust3r_ga_output.keys():
-                    no_ga_output_names.append(output_name)
-                else:
-                    self.dust3r_ga_output[output_name] = dust3r_ga_output[output_name]
-            if len(no_ga_output_names) > 0:
-                print(f'Warning: {no_ga_output_names} does not have global alignment output')
+            """ > Structure + Humans + Cameras optimization - Hongsuk (optional): """
+            # Load dust3r global alignment output
+            self.dust3r_ga_output_dir = dust3r_ga_output_dir
+            self.dust3r_ga_outputs = {} # {small_seq_name: {frame: dust3r_ga_output_path}}
+            if self.dust3r_ga_output_dir is not None:
+                for small_seq_name in self.dust3r_raw_outputs.keys():
+                    for frame in self.dust3r_raw_outputs[small_seq_name].keys():
+                        dust3r_ga_output_path = os.path.join(self.dust3r_ga_output_dir, f'{small_seq_name}_{frame}.pkl')
+                        if not os.path.exists(dust3r_ga_output_path):
+                            print(f'Error: {dust3r_ga_output_path} does not exist')
+                            raise ValueError(f'{dust3r_ga_output_path} does not exist')
+
+                        # initialize dictionary for this sequence if not exists
+                        if small_seq_name not in self.dust3r_ga_outputs:
+                            self.dust3r_ga_outputs[small_seq_name] = {}
+
+                        # Store the path
+                        self.dust3r_ga_outputs[small_seq_name][frame] = dust3r_ga_output_path
+
+            # Setup the VitPose / HMR2 / HAMER outputs 
+            self.vitpose_hmr2_hamer_output_dir = '/scratch/one_month/current/lmueller/egohuman/camera_ready' #vitpose_hmr2_hamer_output_dir 
+
+
         # Load multihmr output
         self.multihmr_output_path = multihmr_output_path
-        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_path is not None and self.multihmr_output_path is not None:
+        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None and self.multihmr_output_path is not None:
             multihmr_output = pickle.load(open(self.multihmr_output_path, 'rb'))
             self.multihmr_output = {} # {output_name: output}
             no_multihmr_output_names = []
@@ -128,7 +150,7 @@ class EgoHumansDataset(Dataset):
                     self.small_seq_list.append(small_seq_name)
                     self.small_seq_annot_list.append(os.path.join(small_seq, 'parsed_annot_hongsuk.pkl'))
                 except:
-                    print(f'Error loading annot for {small_seq}') # there is no smpl annot for this sequence
+                    print(f'Warning: loading annot for {small_seq}') # there is no smpl annot for this sequence
 
         """ Data Structure
         {
@@ -199,6 +221,13 @@ class EgoHumansDataset(Dataset):
                     if small_seq in self.dust3r_raw_outputs.keys() and frame in self.dust3r_raw_outputs[small_seq].keys():
                         dust3r_raw_output_path = self.dust3r_raw_outputs[small_seq][frame]
                         per_frame_data['dust3r_raw_output_path'] = dust3r_raw_output_path
+                        if self.dust3r_ga_output_dir is not None:
+                            if small_seq in self.dust3r_ga_outputs.keys() and frame in self.dust3r_ga_outputs[small_seq].keys():
+                                dust3r_ga_output_path = self.dust3r_ga_outputs[small_seq][frame]
+                                per_frame_data['dust3r_ga_output_path'] = dust3r_ga_output_path
+                            else:
+                                print(f'Error: {small_seq}_{frame} does not have dust3r ga output')
+                                raise ValueError(f'{small_seq}_{frame} does not have dust3r ga output')
                     else:
                         print(f'Warning: {small_seq}_{frame} does not have dust3r raw output')
                         continue
@@ -261,6 +290,12 @@ class EgoHumansDataset(Dataset):
                     else:
                         bbox_annot_path = None
                     img_path = pose2d_annot_path.replace('processed_data/poses2d', 'exo').replace('rgb', 'images').replace('npy', 'jpg')
+
+                    # replace the local path to the data root
+                    img_path = img_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root)
+                    pose2d_annot_path = pose2d_annot_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root)
+                    if bbox_annot_path is not None:
+                        bbox_annot_path = bbox_annot_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root)
 
                     per_frame_data['annot_and_img_paths'][camera_name] = {
                         'pose2d_annot_path': pose2d_annot_path,
@@ -399,7 +434,7 @@ class EgoHumansDataset(Dataset):
         multiview_images = {}
         img_path_list = [sample['annot_and_img_paths'][cam]['img_path'] for cam in selected_cameras]
         # TEMP
-        img_path_list = [img_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root) for img_path in img_path_list]
+        # img_path_list = [img_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root) for img_path in img_path_list]
         dust3r_input_imgs = dust3r_load_images(img_path_list, size=self.dust3r_image_size, verbose=False)
 
         # squeeze the batch dimension for 'img' and 'true_shape'
@@ -433,8 +468,11 @@ class EgoHumansDataset(Dataset):
             assert dust3r_raw_output_camera_names == selected_cameras, "The camera names in the dust3r raw output and the selected cameras do not match!"
             del dust3r_network_output['loss']
 
-        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_path is not None:
-            dust3r_ga_output = self.dust3r_ga_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['dust3r_ga']
+            if self.dust3r_ga_output_dir is not None:
+                dust3r_ga_output_path = sample['dust3r_ga_output_path']
+                with open(dust3r_ga_output_path, 'rb') as f:
+                    dust3r_ga_output_and_gt_cameras = pickle.load(f)
+                dust3r_ga_output = dust3r_ga_output_and_gt_cameras['dust3r_ga']
 
         """ load 2d annot for human optimization later; GT parameters """
         multiview_multiple_human_2d_cam_annot = {}
@@ -455,7 +493,11 @@ class EgoHumansDataset(Dataset):
 
                 # Store annotations for this camera
                 multiview_multiple_human_2d_cam_annot[camera_name] = {}
+                import pdb; pdb.set_trace()
                 for human_idx in range(len(pose2d_annot)):
+                    # ??
+                    # change and to or.
+                    # Or use smpl gt projection for the association...
                     if 'is_valid' in pose2d_annot[human_idx] and not pose2d_annot[human_idx]['is_valid']:
                         continue
 
@@ -471,8 +513,49 @@ class EgoHumansDataset(Dataset):
                         'bbox': bbox
                     }
 
+        """ load 2D pose and 3D mesh predictions for human optimization later; Predicted parameters """
+        multiview_multiple_human_2d_cam_pred = {}
+        for camera_name in selected_cameras:
+            multiview_multiple_human_2d_cam_pred[camera_name] = {}
+            # vit 2d pose pred path
+            # '/scratch/one_month/current/lmueller/egohuman/camera_ready/01_tagging/001_tagging/processed_data/humanwithhand/cam01/__vitpose.pkl
+            multiview_multiple_human_2d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__vitpose.pkl')
+            with open(multiview_multiple_human_2d_cam_pred_path, 'rb') as f:
+                multiview_multiple_human_2d_cam_pred_pose = pickle.load(f)
+            # the saved frame keys are 1-indexed following the image names
+            multiview_multiple_human_2d_cam_pred_pose = multiview_multiple_human_2d_cam_pred_pose[f'{frame+1:05d}'] # (N, 133, 2+1)
+
+            # load 2d bbox pred path
+            multiview_multiple_human_2d_cam_pred_bbox_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__bbox_with_score_used.pkl')
+            with open(multiview_multiple_human_2d_cam_pred_bbox_path, 'rb') as f:
+                multiview_multiple_human_2d_cam_pred_bbox = pickle.load(f)
+            # the saved frame keys are 1-indexed following the image names
+            multiview_multiple_human_2d_cam_pred_bbox = multiview_multiple_human_2d_cam_pred_bbox[f'{frame+1:05d}'] # (N, 4+1)
+
+            # 3d mesh annot path
+            #  '/scratch/one_month/current/lmueller/egohuman/camera_ready/01_tagging/001_tagging/processed_data/humanwithhand/cam01/__hmr2_hamer_smplx.pkl'
+            multiview_multiple_human_3d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__hmr2_hamer_smplx.pkl')
+            with open(multiview_multiple_human_3d_cam_pred_path, 'rb') as f:
+                multiview_multiple_human_3d_cam_pred = pickle.load(f)
+            # the saved frame keys are 1-indexed following the image names
+            multiview_multiple_human_3d_cam_pred = multiview_multiple_human_3d_cam_pred[f'{frame+1:05d}']['params'] # dictionary of human parameters 
+
+            # assign the human names to the 2d pose, 2d bbox, and 3d mesh predictions by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
+            this_cam_human_names = sorted(list(multiview_multiple_human_2d_cam_annot[camera_name].keys()))
+            this_cam_2d_annot = [multiview_multiple_human_2d_cam_annot[camera_name][human_name]['pose2d'] for human_name in this_cam_human_names]
+
+            import pdb; pdb.set_trace()
+            mono_pred_human_names = assign_human_names_to_mono_predictions(multiview_multiple_human_2d_cam_pred_pose, this_cam_2d_annot, this_cam_human_names, sample['annot_and_img_paths'][camera_name]['img_path']) 
+            mono_pred_output_dict = {mono_pred_human_names[i]: 
+                                    {
+                                        'pose2d': multiview_multiple_human_2d_cam_pred_pose[i],
+                                        'bbox': multiview_multiple_human_2d_cam_pred_bbox[i],
+                                        'params': {key: multiview_multiple_human_3d_cam_pred[key][i] for key in multiview_multiple_human_3d_cam_pred.keys()}
+                                    } for i in range(len(mono_pred_human_names))}
+
+
         """ get MultiHMR output; Predicted parameters """
-        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_path is not None and self.multihmr_output_path is not None:
+        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None and self.multihmr_output_path is not None:
             multihmr_output = self.multihmr_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['first_cam_humans']
 
             # assign the human names to the multihmr output
@@ -515,9 +598,9 @@ class EgoHumansDataset(Dataset):
         # add dust3r network output if it exists
         if self.dust3r_raw_output_dir is not None:
             data['dust3r_network_output'] = dust3r_network_output
-        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_path is not None:
+        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None:
             data['dust3r_ga_output'] = dust3r_ga_output
-        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_path is not None and self.multihmr_output_path is not None:
+        if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None and self.multihmr_output_path is not None:
             data['multihmr_output'] = multihmr_output_dict
 
         return data
@@ -544,6 +627,84 @@ def vec_image_from_cam(intrinsics, point_3d, eps=1e-9):
     point_2d = np.concatenate([u.reshape(-1, 1), v.reshape(-1, 1)], axis=1)
 
     return point_2d
+
+
+# assign human names to the mono predictions by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
+def assign_human_names_to_mono_predictions(pred_pose2d, gt_pose2d, gt_human_names, img_path=''):
+    """
+    Assign human names to predicted poses by matching them with ground truth poses
+    
+    Args:
+        pred_pose2d: np.ndarray shape (N, 133, 3) - predicted 2D keypoints with confidence
+        gt_pose2d: list of np.ndarray shape (133, 3) - ground truth 2D keypoints with confidence 
+        gt_human_names: list of human names matching gt_pose2d order
+        img_path: optional path to save visualization
+    
+    Returns:
+        pred_pose2d_human_names: list of human names matching pred_pose2d order
+    """
+    assert len(gt_pose2d) == len(gt_human_names), "Number of GT poses must match number of human names"
+    
+    # Convert predictions to list if numpy array
+    if isinstance(pred_pose2d, np.ndarray):
+        pred_pose2d = [pred_pose2d[i] for i in range(len(pred_pose2d))]
+
+    # Build cost matrix for Hungarian algorithm
+    cost_matrix = np.zeros((len(pred_pose2d), len(gt_pose2d)))
+    for i, pred in enumerate(pred_pose2d):
+        for j, gt in enumerate(gt_pose2d):
+            # Weight distances by confidence scores from both prediction and ground truth
+            confidence_weights = pred[:, 2] * gt[:, 2]
+            # Compute weighted Euclidean distance between corresponding keypoints
+            distances = np.sqrt(np.sum((pred[:, :2] - gt[:, :2])**2, axis=1))
+            cost_matrix[i, j] = np.sum(confidence_weights * distances)
+            # cost_matrix[i, j] = np.sum(distances)
+    # Run Hungarian algorithm to find optimal assignment
+    row_indices, col_indices = linear_sum_assignment(cost_matrix)
+
+    # Assign human names based on matching
+    pred_pose2d_human_names = [gt_human_names[j] for j in col_indices]
+    for i in range(len(pred_pose2d_human_names)):
+        print(f'predicted index: {i}, assigned egohumans human name: {pred_pose2d_human_names[i]}')
+
+
+    # Optionally visualize the matches
+    if img_path:
+        
+        # Draw predicted keypoints in green
+        img = cv2.imread(img_path)
+        for i in range(len(pred_pose2d_human_names)):
+            pred = pred_pose2d[i]
+            # Draw index and assigned name
+            img = cv2.putText(img, f"{i}:{pred_pose2d_human_names[i]}", 
+                            (int(pred[0, 0]), int(pred[0, 1])), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
+            # Draw keypoints
+            for kp in pred:
+                if kp[2] > 0:  # Only draw if confidence > 0
+                    img = cv2.circle(img, (int(kp[0]), int(kp[1])), 3, (0, 255, 0), -1)
+        # save the image with the predicted keypoints
+        file_name = os.path.basename(img_path)[:-4]
+        cv2.imwrite(f'{file_name}_pred_matching.png', img)
+
+        # Draw ground truth keypoints in red
+        img = cv2.imread(img_path)   
+        for i, gt in enumerate(gt_pose2d):
+            # Draw ground truth keypoints in red
+            # Draw index and name
+            img = cv2.putText(img, f"{i}:{gt_human_names[i]}", 
+                            (int(gt[0, 0]), int(gt[0, 1])), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
+            # Draw keypoints
+            for kp in gt:
+                if kp[2] > 0:  # Only draw if confidence > 0
+                    img = cv2.circle(img, (int(kp[0]), int(kp[1])), 3, (0, 0, 255), -1)
+        
+        file_name = os.path.basename(img_path)[:-4]
+        cv2.imwrite(f'{file_name}_gt_matching.png', img)
+
+    import pdb; pdb.set_trace()
+    return pred_pose2d_human_names
 
 # assign human names to the multihmr output by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
 def assign_human_names_to_multihmr_output(multihmr_affine_matrix, multihmr_2d_pred_list, egohumans_2d_annot_list, egohumans_human_names, img_path=''):
@@ -706,7 +867,7 @@ def get_multihmr_camera_parameters(img_size, fov=60, p_x=None, p_y=None):
 
     return K
 
-def create_dataloader(data_root, dust3r_raw_output_dir=None, dust3r_ga_output_path=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[]):
+def create_dataloader(data_root, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[]):
     """
     Create a dataloader for the multiview human dataset
     
@@ -722,7 +883,7 @@ def create_dataloader(data_root, dust3r_raw_output_dir=None, dust3r_ga_output_pa
     dataset = EgoHumansDataset(
         data_root=data_root,
         dust3r_raw_output_dir=dust3r_raw_output_dir,
-        dust3r_ga_output_path=dust3r_ga_output_path,
+        dust3r_ga_output_dir=dust3r_ga_output_dir,
         multihmr_output_path=multihmr_output_path,
         split=split,
         subsample_rate=subsample_rate,
@@ -743,11 +904,18 @@ def create_dataloader(data_root, dust3r_raw_output_dir=None, dust3r_ga_output_pa
 
 
 if __name__ == '__main__':
-    data_root = '/home/hongsuk/projects/egohumans/data'
-    dust3r_output_path =  '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl'
-    dust3r_ga_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_02:20:29.pkl'
-    multihmr_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl'
-    dataset, dataloader = create_dataloader(data_root, dust3r_output_path=dust3r_output_path, dust3r_ga_output_path=dust3r_ga_output_path, multihmr_output_path=multihmr_output_path, batch_size=1, split='test', num_workers=0)
+    # data_root = '/home/hongsuk/projects/egohumans/data'
+    # dust3r_output_path =  '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl'
+    # dust3r_ga_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_02:20:29.pkl'
+    # multihmr_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl'
+    # dataset, dataloader = create_dataloader(data_root, dust3r_output_path=dust3r_output_path, dust3r_ga_output_path=dust3r_ga_output_path, multihmr_output_path=multihmr_output_path, batch_size=1, split='test', num_workers=0)
+    
+    num_of_cams = 4
+    data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
+    dust3r_output_dir = f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
+    dust3r_ga_output_dir = f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
+    dataset, dataloader = create_dataloader(data_root, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0)
+
     item = dataset.get_single_item(0)
     # for data in dataloader:
     #     import pdb; pdb.set_trace()
