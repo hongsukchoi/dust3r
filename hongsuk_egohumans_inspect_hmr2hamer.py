@@ -8,6 +8,7 @@ import os
 import time
 import viser
 import matplotlib.pyplot as plt
+import time
 from mpl_toolkits.mplot3d import Axes3D
 
 from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, ORIGINAL_SMPLX_JOINT_NAMES
@@ -184,6 +185,7 @@ def main():
 
     num_persons = params['body_pose'].shape[0]
     # define the smplx layer
+    start_time = time.time()
     smplx_layer = smplx.create(
         model_path = '/home/hongsuk/projects/egoexo/essentials/body_models',
         model_type = 'smplx',
@@ -195,6 +197,10 @@ def main():
         num_betas = 10,
         batch_size = num_persons,
     )
+    smplx_layer = smplx_layer.to('cuda')
+    end_time = time.time()
+    print(f"Time taken to define smplx layer: {end_time - start_time:.2f} seconds")
+    import pdb; pdb.set_trace()
 
     body_pose = params['body_pose'].reshape(num_persons, -1)
     global_orient = params['global_orient'].reshape(num_persons, -1)
@@ -204,9 +210,6 @@ def main():
     transl = params['transl'].reshape(num_persons, -1)
 
     # smpl-x forward path
-    smplx_layer = smplx_layer.to('cuda')
-
-
     body = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose, transl=transl)
 
     # vertices_list = body.vertices # (N, 10475, 3)

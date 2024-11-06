@@ -64,7 +64,8 @@ from dust3r.cloud_opt.commons import cosine_schedule, linear_schedule
 from multihmr.blocks import SMPL_Layer
 from multihmr.utils import get_smplx_joint_names
 
-from hongsuk_egohumans_dataloader import create_dataloader
+# from hongsuk_egohumans_dataloader import create_dataloader
+from hongsuk_egohumans_dust3r_multihmr_dataloader import create_dataloader
 from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, SMPLX_JOINT_NAMES
 
 from hongsuk_vis_viser_env_only import show_env_in_viser
@@ -254,7 +255,7 @@ def init_human_params(multihmr_output, device = 'cuda'):
 # I think there might be indexing error around camera names and human names
 
 
-def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl', dust3r_ga_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_30:17:54.pkl', dust3r_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl', egohumans_data_root: str = './data', vis: bool = False):
+def main(output_path: str = './outputs/egohumans', multihmr_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl', dust3r_ga_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_output_30:17:54.pkl', dust3r_output_path: str = '/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_network_output_30:11:10.pkl', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_path).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_path, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)

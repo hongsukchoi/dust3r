@@ -10,6 +10,77 @@ import smplx
 
 from scipy.spatial.transform import Rotation as R
 
+
+def visualize_cameras(cam_poses):
+    # set viser
+    server = viser.ViserServer()
+    server.scene.world_axes.visible = True
+    server.scene.set_up_direction("+y")
+
+    # get rotation matrix of 180 degrees around x axis
+    rot_180 = np.eye(3)
+    rot_180[1, 1] = -1
+    rot_180[2, 2] = -1  
+
+    # Add GUI elements.
+    timing_handle = server.gui.add_number("Time (ms)", 0.01, disabled=True)
+    cam_handles = []
+    for cam_name, cam_pose in cam_poses.items():
+        # Visualize the camera
+        camera = cam_pose
+        camera[:3, :3] = rot_180 @ camera[:3, :3] 
+        camera[:3, 3] = camera[:3, 3] @ rot_180
+        
+        # rotation matrix to quaternion
+        quat = R.from_matrix(camera[:3, :3]).as_quat()
+        # xyzw to wxyz
+        quat = np.concatenate([quat[3:], quat[:3]])
+        # translation vector
+        trans = camera[:3, 3]
+
+        # add camera
+        cam_handle = server.scene.add_frame(
+            f"/cam_{cam_name}",
+            wxyz=quat,
+            position=trans,
+            show_axes=True,
+            axes_length=0.5,
+            axes_radius=0.04,
+        )
+        cam_handles.append(cam_handle)
+
+    # add transform controls, initialize the location with the first two cameras
+    control0 = server.scene.add_transform_controls(
+        "/controls/0",
+        position=cam_handles[0].position,
+        scale=cam_handles[0].axes_length,
+    )
+    control1 = server.scene.add_transform_controls(
+        "/controls/1",
+        position=cam_handles[1].position,
+        scale=cam_handles[1].axes_length,
+    )
+    distance_text = server.gui.add_text("Distance", initial_value="Distance: 0")
+
+    def update_distance():
+        distance = np.linalg.norm(control0.position - control1.position)
+        distance_text.value = f"Distance: {distance:.2f}"
+
+        server.scene.add_spline_catmull_rom(
+            "/controls/line",
+            np.stack([control0.position, control1.position], axis=0),
+            color=(255, 0, 0),
+        )
+
+    control0.on_update(lambda _: update_distance())
+    control1.on_update(lambda _: update_distance())
+    
+    start_time = time.time()
+    while True:
+        time.sleep(0.01)
+        timing_handle.value = (time.time() - start_time) 
+
+
 def procrustes_align(X, Y):
     """
     Performs Procrustes alignment between two sets of points X and Y
