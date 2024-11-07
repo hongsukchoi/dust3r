@@ -25,7 +25,7 @@ def get_color(idx):
     ])  
     return colors[idx % len(colors)]
 
-def visualize_cameras_and_human(cam_poses, human_vertices, smplx_faces):
+def visualize_cameras_and_human(cam_poses, human_vertices, smplx_faces, world_colmap_pointcloud_xyz=None, world_colmap_pointcloud_rgb=None):
     cam_poses = copy.deepcopy(cam_poses)
     human_vertices = copy.deepcopy(human_vertices)
     # set viser
@@ -79,6 +79,16 @@ def visualize_cameras_and_human(cam_poses, human_vertices, smplx_faces):
             axes_radius=0.04,
         )
         cam_handles.append(cam_handle)
+
+    # Add scene structure pointcloud
+    if world_colmap_pointcloud_xyz is not None:
+        world_colmap_pointcloud_xyz = world_colmap_pointcloud_xyz @ rot_180
+        server.scene.add_point_cloud(
+        "/world_colmap_pointcloud",
+        points=world_colmap_pointcloud_xyz,
+        colors=world_colmap_pointcloud_rgb,
+        point_size=0.01,
+    )
 
     # add transform controls, initialize the location with the first two cameras
     control0 = server.scene.add_transform_controls(

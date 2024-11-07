@@ -103,7 +103,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as tvf
 import smplx
+import warnings
 
+from typing import List
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -640,7 +642,7 @@ def get_stage_optimizer(human_params, scene_params, stage, lr=0.01):
     optimizer = torch.optim.Adam(optimizing_params, lr=lr)
     return optimizer
 
-def vis_decode_human_params_and_cameras(world_multiple_human_3d_annot, cam_poses, smpl_layer, device='cuda'):
+def vis_decode_human_params_and_cameras(world_multiple_human_3d_annot, cam_poses, smpl_layer, world_colmap_pointcloud_xyz, world_colmap_pointcloud_rgb, device='cuda'):
     # human_params: Dict[human_name -> Dict[param_name -> torch.Tensor]]
     # cam_poses: Dict[cam_name -> np.ndarray] (4,4)
 
@@ -661,9 +663,9 @@ def vis_decode_human_params_and_cameras(world_multiple_human_3d_annot, cam_poses
         vertices = vertices - joints[0:1:, ] + root_transl
         world_human_vertices[human_name] = vertices
 
-    visualize_cameras_and_human(cam_poses, human_vertices=world_human_vertices, smplx_faces=smpl_layer.faces)
+    visualize_cameras_and_human(cam_poses, human_vertices=world_human_vertices, smplx_faces=smpl_layer.faces, world_colmap_pointcloud_xyz=world_colmap_pointcloud_xyz, world_colmap_pointcloud_rgb=world_colmap_pointcloud_rgb)
 
-def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/dust3r_ga_outputs_and_gt_cameras_random_sampled_views', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/dust3r_ga_outputs_and_gt_cameras_random_sampled_views', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_dir, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
@@ -676,6 +678,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
     # EgoHumans data
     # Fix batch size to 1 for now   
     selected_big_seq_list = sel_big_seqs #['03_fencing'] # #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
+    selected_small_seq_start_and_end_idx_tuple = sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
     # num_of_cams = 3
     num_of_cams = 4
@@ -684,7 +687,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
     dust3r_ga_output_dir = osp.join(dust3r_ga_output_dir, f'num_of_cams{num_of_cams}')
     optim_output_dir = osp.join(output_dir, 'optim_outputs', 'optim_outputs_trial1', f'num_of_cams{num_of_cams}')
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
-    dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list)
+    dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
 
     # Dust3r Config for the global alignment
     mode = GlobalAlignerMode.PointCloudOptimizer if num_of_cams > 2 else GlobalAlignerMode.PairViewer
@@ -703,18 +706,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
     # Human related Config
     shape_prior_weight = 1.0
     human_lr = lr * 1.0 # not really used; to use modify the adjust_lr function; define different learning rate for the human parameters
-    # smplx_layer = smplx.create(
-    #     model_path = '/home/hongsuk/projects/egoexo/essentials/body_models',
-    #     model_type = 'smplx',
-    #     gender = 'neutral',
-    #     use_pca = False,
-    #     num_pca_comps = 45,
-    #     flat_hand_mean = True,
-    #     use_face_contour = True,
-    #     num_betas = 10,
-    #     batch_size = 1,
-    # ) # for Pred
-    # smplx_layer = smplx_layer.to(device)
+    # set smplx layers
     smplx_layer_dict = {
         1: smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 1).to(device),
         2: smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 2).to(device),
@@ -741,22 +733,25 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
         world_gt_cameras = sample['multiview_cameras']
 
         # Visualize the groundtruth human parameters and cameras
-        # world_cam_poses = {}
-        # for cam_name in world_gt_cameras.keys():
-        #     cam2world = world_gt_cameras[cam_name]['cam2world_4by4']
-        #     world_cam_poses[cam_name] = cam2world
-        # vis_decode_human_params_and_cameras(world_multiple_human_3d_annot, world_cam_poses, smpl_layer, device)
+        world_cam_poses = {}
+        for cam_name in world_gt_cameras.keys():
+            cam2world = world_gt_cameras[cam_name]['cam2world_4by4']
+            world_cam_poses[cam_name] = cam2world
+        world_colmap_pointcloud_xyz = sample['world_colmap_pointcloud_xyz']
+        world_colmap_pointcloud_rgb = sample['world_colmap_pointcloud_rgb']
+        vis_decode_human_params_and_cameras(world_multiple_human_3d_annot, world_cam_poses, smpl_layer, world_colmap_pointcloud_xyz, world_colmap_pointcloud_rgb, device)
 
         # TEMPORARY Sanity check; due to the reid issue because of the noisy 2D groundtruth annotation, some views don't have any human detections, which doesn't make sense
         # Skip those samples
+        sample_cam_names = list(sample['multiview_multiple_human_cam_pred'].keys())
         sanity_check_skip = False
         for cam_name in sample['multiview_multiple_human_cam_pred'].keys():
             if len(sample['multiview_multiple_human_cam_pred'][cam_name].keys()) == 0:
                 sanity_check_skip = True
                 break
         if sanity_check_skip:
-            print("Skipping this sample due to no human detections in at least one camera view...")
-            print(f"Skipping sample: {sample['sequence']}_{sample['frame']}_{''.join(cam_names)}...")
+            print("\nSkipping this sample due to no human detections in at least one camera view...")
+            print(f"Skipping sample: {sample['sequence']}_{sample['frame']}_{''.join(sample_cam_names)}...")
             continue
 
         """ Get dust3r network output and global alignment results """
@@ -765,6 +760,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
         # load the precomputed 3D points, camera poses, and intrinsics from Dust3r GA output
         dust3r_ga_output = sample['dust3r_ga_output']
         pts3d, im_focals, im_poses, cam_names = get_resume_info(dust3r_ga_output, device)
+        assert sample_cam_names == cam_names, "Camera names do not match"
         
         # intrinsics for human translation initialization
         init_focal_length = im_focals[0] #scene.get_intrinsics()[0][0, 0].detach().cpu().numpy()
@@ -1012,7 +1008,6 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
                 
         print(f"Final losses: scene_loss={scene_loss.item():g}, human_loss={human_loss.item():g}")
         print(f"Time taken: human_loss={human_loss_timer.total_time:g}s, scene_loss={scene_loss_timer.total_time:g}s, backward={gradient_timer.total_time:g}s")
-        import pdb; pdb.set_trace()
 
         # Save output
         output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"

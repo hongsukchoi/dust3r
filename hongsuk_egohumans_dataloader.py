@@ -12,7 +12,7 @@ from PIL import Image, ImageOps
 import tqdm
 import pickle
 import random
-
+import collections
 from collections import defaultdict
 from dust3r.utils.image import load_images as dust3r_load_images
 from multihmr.utils import normalize_rgb, get_focalLength_from_fieldOfView
@@ -21,7 +21,7 @@ from multihmr.utils import get_smplx_joint_names
 from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, SMPLX_JOINT_NAMES
 
 class EgoHumansDataset(Dataset):
-    def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[]):
+    def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
         """
         Args:
             data_root (str): Root directory of the dataset
@@ -45,15 +45,6 @@ class EgoHumansDataset(Dataset):
             self.camera_names = cam_names
             self.num_of_cams = len(cam_names)
 
-        # choose only a few sequence for testing else all sequences
-        # 048_badminton to 051_badminton
-        # start_idx = 3#55#51
-        # end_idx = 13#58#54
-        # self.selected_small_seq_name_list = [f'{i:03d}_tennis' for i in range(start_idx, end_idx+1)]
-        # self.selected_small_seq_name_list = [f'{i:03d}_badminton' for i in range(start_idx, end_idx+1)]
-
-        self.selected_small_seq_name_list = [] #['001_fencing'] #'001_badminton']  # ex) ['001_tagging', '002_tagging']
-        self.selected_big_seq_list = selected_big_seq_list # ex) ['01_tagging', '02_lego']
         # big sequence name dictionary
         self.big_seq_name_dict = {
             'tagging': '01_tagging',
@@ -64,6 +55,16 @@ class EgoHumansDataset(Dataset):
             'badminton': '06_badminton',
             'tennis': '07_tennis',
         }
+        self.big_seq_name_inv_dict = {v: k for k, v in self.big_seq_name_dict.items()}
+
+        # choose only a few sequence for testing else, all sequences
+        self.selected_big_seq_list = selected_big_seq_list # ex) ['01_tagging', '02_lego']
+        self.selected_small_seq_name_list = [] #['001_fencing'] #'001_badminton']  # ex) ['001_tagging', '002_tagging']
+        if selected_small_seq_start_and_end_idx_tuple is not None:
+            start_idx, end_idx = selected_small_seq_start_and_end_idx_tuple
+            for big_seq_name in self.selected_big_seq_list:
+                big_seq_name_wo_idx = self.big_seq_name_inv_dict[big_seq_name] # ex) '01_tagging' -> 'tagging', '02_lego' -> 'legoassemble'
+                self.selected_small_seq_name_list.extend([f'{i:03d}_{big_seq_name_wo_idx}' for i in range(start_idx, end_idx+1)])
 
         # Load dust3r network output
         self.dust3r_raw_output_dir = dust3r_raw_output_dir
@@ -167,7 +168,8 @@ class EgoHumansDataset(Dataset):
                     self.small_seq_annot_list.append(os.path.join(small_seq, 'parsed_annot_hongsuk.pkl'))
                 except:
                     print(f'Warning: loading annot for {small_seq} failed') # there is no smpl annot for this sequence
-        print(f'Successfully loaded annot for {len(self.small_seq_list)} sequences')
+        print(f'Successfully loaded annot for {len(self.small_seq_list)} (small) sequences')
+        
 
         """ Data Structure
         {
@@ -219,7 +221,9 @@ class EgoHumansDataset(Dataset):
             with open(small_seq_annot, 'rb') as f:
                 annot = pickle.load(f)
         
+            big_seq_name = self.big_seq_name_dict[small_seq.split('_')[1]]
             num_frames = annot['num_frames']
+
 
             for frame in range(num_frames):
                 if frame == 0 or frame % self.subsample_rate != 0:
@@ -328,11 +332,13 @@ class EgoHumansDataset(Dataset):
                     pose2d_annot_path = pose2d_annot_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root)
                     if bbox_annot_path is not None:
                         bbox_annot_path = bbox_annot_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root)
+                    colmap_dir = os.path.join(self.data_root, big_seq_name, small_seq, 'colmap', 'workplace')
 
                     per_frame_data['annot_and_img_paths'][camera_name] = {
                         'pose2d_annot_path': pose2d_annot_path,
                         'bbox_annot_path': bbox_annot_path,
-                        'img_path': img_path
+                        'img_path': img_path,
+                        'colmap_dir': colmap_dir
                     }
                     # do this in __getitem__
                     # pose2d_annot = np.load(pose2d_annot_path, allow_pickle=True)
@@ -360,7 +366,8 @@ class EgoHumansDataset(Dataset):
         first_cam_Rt_4by4 = cameras[first_cam]['cam2world_4by4'].copy()
 
         # make camera parameters homogeneous and invert
-        first_cam_Rt_inv_4by4 = np.linalg.inv(first_cam_Rt_4by4)
+        # world to first camera
+        first_cam_Rt_inv_4by4 = np.linalg.inv(first_cam_Rt_4by4) # (4,4)
         
         # Transform all cameras relative to first camera
         for cam in sorted(cameras.keys()):
@@ -370,6 +377,12 @@ class EgoHumansDataset(Dataset):
 
         """ load 3d world annot; GT parameters """
         if self.optimize_human: # GT paramaters for evaluation
+            # for scene structure evaluation
+            colmap_dir = sample['annot_and_img_paths'][first_cam]['colmap_dir']
+            points3D, points3D_rgb = load_scene_geometry(colmap_dir)
+            # transform the world points to first camera frame
+            points3D = points3D @ first_cam_Rt_inv_4by4[:3, :3].T  + first_cam_Rt_inv_4by4[:3, 3:].T
+
             world_multiple_human_3d_annot = {}
             for human_name in sample['world_data'].keys():
                 world_multiple_human_3d_annot[human_name] = sample['world_data'][human_name]
@@ -662,7 +675,7 @@ class EgoHumansDataset(Dataset):
                                                                             mono_multiple_human_2d_cam_pred_pose, multiple_human_2d_cam_annot_pose2d, \
                                                                             multiple_human_2d_cam_annot_human_names, \
                                                                             self.egohumans_image_size_tuple, \
-                                                                            #    cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
+                                                                            # cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
                                                                             ) 
                 mono_pred_output_dict = {mono_pred_human_names[i]: # ex) 'aria01'
                                         {
@@ -728,6 +741,8 @@ class EgoHumansDataset(Dataset):
             data['multiview_multiple_human_cam_pred'] = multiview_multiple_human_cam_pred # predicted 2D + 3D parameters
             data['multiview_multiple_human_2d_cam_annot'] = multiview_multiple_human_2d_cam_annot # groundtruth 2D annotations
             data['world_multiple_human_3d_annot'] = world_multiple_human_3d_annot # groundtruth 3D annotations for evaluation
+            data['world_colmap_pointcloud_xyz'] = points3D
+            data['world_colmap_pointcloud_rgb'] = points3D_rgb
 
         return data
 
@@ -1001,6 +1016,46 @@ def assign_human_names_to_multihmr_output(multihmr_affine_matrix, multihmr_2d_pr
 
     return multihmr_output_human_names
 
+# get colmap pointcloud in the world coordinate frame (aria01)
+def load_scene_geometry(colmap_dir, max_dist=0.1):
+    # load the colmap to aria01 transform
+    colmap_from_aria_transforms_path = os.path.join(colmap_dir, 'colmap_from_aria_transforms.pkl')
+    with open(colmap_from_aria_transforms_path, 'rb') as f:
+        colmap_from_aria_transforms = pickle.load(f)
+    aria01_from_colmap_transform = np.linalg.inv(colmap_from_aria_transforms['aria01']) # (4,4)
+
+    Point3D = collections.namedtuple(
+            "Point3D", ["id", "xyz", "rgb", "error", "image_ids", "point2D_idxs"])
+
+    path = os.path.join(colmap_dir, 'points3D.txt')
+
+    # https://github.com/colmap/colmap/blob/5879f41fb89d9ac71d977ae6cf898350c77cd59f/scripts/python/read_write_model.py#L308
+    points3D = []
+    points3D_rgb = []
+    with open(path, "r") as fid:
+        while True:
+            line = fid.readline()
+            if not line:
+                break
+            line = line.strip()
+            if len(line) > 0 and line[0] != "#":
+                elems = line.split()
+                point3D_id = int(elems[0])
+                xyz = np.array(tuple(map(float, elems[1:4])))
+                rgb = np.array(tuple(map(int, elems[4:7])))
+                error = float(elems[7])
+                image_ids = np.array(tuple(map(int, elems[8::2])))
+                point2D_idxs = np.array(tuple(map(int, elems[9::2])))
+                points3D.append(xyz.reshape(1, -1))
+                points3D_rgb.append(rgb.reshape(1, -1))
+    points3D = np.concatenate(points3D, axis=0) # (N,3)
+    # apply the colmap to aria01 transform to the points
+    points3D = (aria01_from_colmap_transform[:3, :3] @ points3D.T + aria01_from_colmap_transform[:3, 3][:, None]).T # (N,3)
+
+    points3D_rgb = np.concatenate(points3D_rgb, axis=0)
+    
+    return points3D, points3D_rgb
+
 # get the affine transform matrix from cropped image to original image
 # this is just to get the affine matrix (crop image to original image) - Hongsuk
 def get_dust3r_affine_transform(file, size=512, square_ok=False):
@@ -1097,7 +1152,7 @@ def get_multihmr_camera_parameters(img_size, fov=60, p_x=None, p_y=None):
 
     return K
 
-def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[]):
+def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
     """
     Create a dataloader for the multiview human dataset
     
@@ -1121,7 +1176,8 @@ def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=Non
         subsample_rate=subsample_rate,
         cam_names=cam_names,
         num_of_cams=num_of_cams,
-        selected_big_seq_list=selected_big_seq_list
+        selected_big_seq_list=selected_big_seq_list,
+        selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple
     )
     
     dataloader = DataLoader(
@@ -1143,16 +1199,47 @@ if __name__ == '__main__':
     # multihmr_output_path = '/home/hongsuk/projects/dust3r/outputs/egohumans/multihmr_output_30:23:17.pkl'
     # dataset, dataloader = create_dataloader(data_root, dust3r_output_path=dust3r_output_path, dust3r_ga_output_path=dust3r_ga_output_path, multihmr_output_path=multihmr_output_path, batch_size=1, split='test', num_workers=0)
     
-    # ['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing']
-    selected_big_seq_list = ['07_tennis']  #['06_badminton']# ['5_volleyball', '04_basketball'] # ['01_tagging', '02_lego', '03_fencing']  #-> might stop because of scipy infinity bug
-    num_of_cams = None
-    data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
-    dust3r_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
-    dust3r_ga_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
-    dataset, dataloader = create_dataloader(data_root, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0, selected_big_seq_list=selected_big_seq_list)
+    # selected_big_seq_list = ['07_tennis']  #['06_badminton']# ['5_volleyball', '04_basketball'] # ['01_tagging', '02_lego', '03_fencing']  #-> might stop because of scipy infinity bug
+    # num_of_cams = None
+    # data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
+    # dust3r_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
+    # dust3r_ga_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
+    # dataset, dataloader = create_dataloader(data_root, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0, selected_big_seq_list=selected_big_seq_list)
 
-    dataset_len = len(dataset)
-    step = 1
-    for i in tqdm(range(0, dataset_len, step)):
-        item = dataset.get_single_item(i)
+    # dataset_len = len(dataset)
+    # step = 1
+    # for i in tqdm(range(0, dataset_len, step)):
+    #     item = dataset.get_single_item(i)
+    colmap_dir = '/home/hongsuk/projects/dust3r/data/egohumans_data/01_tagging/001_tagging/colmap/workplace'
+    points3D, points3D_rgb = load_scene_geometry(colmap_dir)
+    print(points3D.shape, points3D_rgb.shape)
 
+    import time
+    import viser 
+
+    # set viser
+    server = viser.ViserServer()
+    server.scene.world_axes.visible = True
+    server.scene.set_up_direction("+y")
+
+    # get rotation matrix of 180 degrees around x axis
+    rot_180 = np.eye(3)
+    rot_180[1, 1] = -1
+    rot_180[2, 2] = -1
+
+    # Add GUI elements.
+    timing_handle = server.gui.add_number("Time (ms)", 0.01, disabled=True)
+
+      
+    points = points3D @ rot_180
+    pc_handle = server.scene.add_point_cloud(
+        "/pts3d",
+        points=points,
+        colors=points3D_rgb,
+        point_size=0.1,
+    )
+
+    start_time = time.time()
+    while True:
+        time.sleep(0.01)
+        timing_handle.value = (time.time() - start_time) 
