@@ -109,18 +109,19 @@ def parse_to_save_data(scene, cam_names, main_cam_idx=None):
         }
     return results
 
-def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # EgoHumans data
     # Fix batch size to 1 for now
-    selected_big_seq_list = ['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
+    selected_big_seq_list = [] #['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    num_of_cams = 4
-    output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', f'num_of_cams{num_of_cams}')
+    num_of_cams = 10 #4
+    subsample_rate = 100
+    output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', 'dust3r_ga_outputs_and_gt_cameras_random_sampled_views', f'num_of_cams{num_of_cams}')
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
-    dataset, dataloader = create_dataloader(egohumans_data_root, dust3r_raw_output_dir=dust3r_raw_output_dir, batch_size=1, split='test', subsample_rate=10, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list)
+    dataset, dataloader = create_dataloader(egohumans_data_root, dust3r_raw_output_dir=dust3r_raw_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list)
 
     # Dust3r Config for the global alignment
     mode = GlobalAlignerMode.PointCloudOptimizer if num_of_cams > 2 else GlobalAlignerMode.PairViewer

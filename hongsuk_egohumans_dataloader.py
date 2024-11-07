@@ -9,7 +9,10 @@ import cv2
 import glob
 import PIL
 from PIL import Image, ImageOps
+import tqdm
 import pickle
+import random
+
 from collections import defaultdict
 from dust3r.utils.image import load_images as dust3r_load_images
 from multihmr.utils import normalize_rgb, get_focalLength_from_fieldOfView
@@ -49,7 +52,7 @@ class EgoHumansDataset(Dataset):
         # self.selected_small_seq_name_list = [f'{i:03d}_tennis' for i in range(start_idx, end_idx+1)]
         # self.selected_small_seq_name_list = [f'{i:03d}_badminton' for i in range(start_idx, end_idx+1)]
 
-        self.selected_small_seq_name_list = [] #'001_badminton']  # ex) ['001_tagging', '002_tagging']
+        self.selected_small_seq_name_list = [] #['001_fencing'] #'001_badminton']  # ex) ['001_tagging', '002_tagging']
         self.selected_big_seq_list = selected_big_seq_list # ex) ['01_tagging', '02_lego']
         # big sequence name dictionary
         self.big_seq_name_dict = {
@@ -108,9 +111,14 @@ class EgoHumansDataset(Dataset):
                         self.dust3r_ga_outputs[small_seq_name][frame] = dust3r_ga_output_path
 
         # Setup the VitPose / HMR2 / HAMER outputs 
-        self.vitpose_hmr2_hamer_output_dir = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready'
-        # '/scratch/one_month/current/lmueller/egohuman/camera_ready' #vitpose_hmr2_hamer_output_dir 
-
+        self.vitpose_hmr2_hamer_output_dir = vitpose_hmr2_hamer_output_dir ## '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready'
+        if self.vitpose_hmr2_hamer_output_dir is not None:
+            import smplx
+            # for visualization, transform the human parameters to each camera frame and project to 2D and draw 2D keypoints and save them
+            smpl_model_dir = './models' #'/home/hongsuk/projects/egohumans/egohumans/external/cliff/common/../data'
+            smpl_model = smplx.create(smpl_model_dir, "smpl")
+            smpl_model = smpl_model.float()
+            self.smpl_model = smpl_model
 
         # Load multihmr output
         self.multihmr_output_path = multihmr_output_path
@@ -207,14 +215,14 @@ class EgoHumansDataset(Dataset):
         """Load and organize dataset information"""
         per_frame_data_list = []
 
-        for small_seq, small_seq_annot in zip(self.small_seq_list, self.small_seq_annot_list):
+        for small_seq, small_seq_annot in tqdm.tqdm(zip(self.small_seq_list, self.small_seq_annot_list), total=len(self.small_seq_list)):
             with open(small_seq_annot, 'rb') as f:
                 annot = pickle.load(f)
         
             num_frames = annot['num_frames']
 
             for frame in range(num_frames):
-                if frame % self.subsample_rate != 0:
+                if frame == 0 or frame % self.subsample_rate != 0:
                     continue
 
                 per_frame_data = {
@@ -230,6 +238,12 @@ class EgoHumansDataset(Dataset):
                     if small_seq in self.dust3r_raw_outputs.keys() and frame in self.dust3r_raw_outputs[small_seq].keys():
                         dust3r_raw_output_path = self.dust3r_raw_outputs[small_seq][frame]
                         per_frame_data['dust3r_raw_output_path'] = dust3r_raw_output_path
+
+                        with open(dust3r_raw_output_path, 'rb') as f:
+                            dust3r_raw_outputs = pickle.load(f)
+                        # Cameras should be consistent across outputs (dust3r raw output, ga output) and inputs to the final otimization too
+                        selected_cameras = dust3r_raw_outputs['img_names'][2]
+                        
                         if self.dust3r_ga_output_dir is not None:
                             if small_seq in self.dust3r_ga_outputs.keys() and frame in self.dust3r_ga_outputs[small_seq].keys():
                                 dust3r_ga_output_path = self.dust3r_ga_outputs[small_seq][frame]
@@ -237,36 +251,44 @@ class EgoHumansDataset(Dataset):
                             else:
                                 print(f'Error: {small_seq}_{frame} does not have dust3r ga output')
                                 raise ValueError(f'{small_seq}_{frame} does not have dust3r ga output')
+                        
                     else:
                         print(f'Warning: {small_seq}_{frame} does not have dust3r raw output')
                         continue
 
-                """ add camera data """
-                per_frame_data['cameras'] = annot['cameras'] # dictionrary of camera names and their parameters
-                
-                if self.camera_names is not None:
-                    # check whether the cameras.keys() are superset of the self.camera_names
-                    # if not, skip this frame
-                    selected_cameras = sorted([cam for cam in per_frame_data['cameras'].keys() if cam in self.camera_names ])
-                    if len(selected_cameras) != len(self.camera_names):
-                        # print(f'Warning: {small_seq} does not have all the cameras in self.camera_names; skipping this frame')
-                        continue
                 else:
-                    if self.num_of_cams is None:
-                        print('Warning: Both camera names and number of cameras are None... Using all available cameras')
-                        selected_cameras = sorted(per_frame_data['cameras'].keys())
+                    if self.camera_names is not None:
+                        # check whether the cameras.keys() are superset of the self.camera_names
+                        # if not, skip this frame
+                        selected_cameras = sorted([cam for cam in annot['cameras'].keys() if cam in self.camera_names ])
+                        if len(selected_cameras) != len(self.camera_names):
+                            # print(f'Warning: {small_seq} does not have all the cameras in self.camera_names; skipping this frame')
+                            continue
                     else:
-                        available_cameras = sorted(per_frame_data['cameras'].keys())
-                        if len(available_cameras) < self.num_of_cams:
-                            selected_cameras = available_cameras
+                        if self.num_of_cams is None:
+                            print('Warning: Both camera names and number of cameras are None... Using all available cameras')
+                            selected_cameras = sorted(annot['cameras'].keys())
                         else:
-                            if self.num_of_cams <= 2:
-                                selected_cameras = available_cameras[:self.num_of_cams]
+                            available_cameras = sorted(annot['cameras'].keys())
+                            if len(available_cameras) < self.num_of_cams:
+                                selected_cameras = available_cameras
                             else:
-                                # Uniform sampling for more than 2 cameras
-                                indices = np.linspace(0, len(available_cameras)-1, self.num_of_cams, dtype=int)
-                                selected_cameras = [available_cameras[i] for i in indices]
+                                # New camera sampling that I (Hongsuk) used after Nov 6th 2024
+                                # random sampling
+                                selected_cameras = random.sample(available_cameras, self.num_of_cams)
+                                selected_cameras.sort()
 
+                                # Previous camera sampling that I (Hongsuk) used before Nov 6th 2024
+                                # if self.num_of_cams <= 2:
+                                #     selected_cameras = available_cameras[:self.num_of_cams]
+                                # else:
+                                #     # Uniform sampling for more than 2 cameras
+                                #     indices = np.linspace(0, len(available_cameras)-1, self.num_of_cams, dtype=int)
+                                #     selected_cameras = [available_cameras[i] for i in indices]
+
+                """ add camera data """
+                # per_frame_data['cameras'] = annot['cameras'] # dictionrary of camera names and their parameters
+                
                 # sanitize camera data
                 per_frame_data['cameras'] = {}
                 for cam in selected_cameras:
@@ -347,40 +369,53 @@ class EgoHumansDataset(Dataset):
             cameras[cam]['cam2world_4by4'] = new_cam_Rt_4by4
 
         """ load 3d world annot; GT parameters """
-        world_multiple_human_3d_annot = {}
-        for human_name in sample['world_data'].keys():
-            world_multiple_human_3d_annot[human_name] = sample['world_data'][human_name]
+        if self.optimize_human: # GT paramaters for evaluation
+            world_multiple_human_3d_annot = {}
+            for human_name in sample['world_data'].keys():
+                world_multiple_human_3d_annot[human_name] = sample['world_data'][human_name]
 
-        """ align the world annot to the first camera frame 
-        # but it's messy to get correct transformation...
-        # align the world annot to the first camera frame
-        for human_name, smplx_3d_params in world_multiple_human_3d_annot.items():
-            transl, global_orient = smplx_3d_params['transl'], smplx_3d_params['global_orient']
+            # Align the world annot to the first camera frame
+            # but it's messy to get correct transformation...
+            for human_name, smplx_3d_params in world_multiple_human_3d_annot.items():
+                transl, global_orient = smplx_3d_params['transl'], smplx_3d_params['global_orient']
 
-            world_multiple_human_3d_annot[human_name]['transl'] = first_cam_Rt_inv_4by4[:3, :3] @ transl + first_cam_Rt_inv_4by4[:3, 3]
-            # world_multiple_human_3d_annot[human_name]['global_orient'] = first_cam_Rt_inv_4by4[:3, :3] @ global_orient
-            # Convert global_orient from axis-angle to rotation matrix
-            global_orient_mat = cv2.Rodrigues(global_orient)[0]  # (3,3)
-            # Multiply by first camera rotation
-            aligned_global_orient_mat = first_cam_Rt_inv_4by4[:3, :3] @ global_orient_mat
-            
-            # Convert back to axis-angle representation
-            aligned_global_orient, _ = cv2.Rodrigues(aligned_global_orient_mat)
-            # Update the global orientation
-            world_multiple_human_3d_annot[human_name]['global_orient'] = aligned_global_orient.reshape(-1)
+                # world_multiple_human_3d_annot[human_name]['transl'] = first_cam_Rt_inv_4by4[:3, :3] @ transl + first_cam_Rt_inv_4by4[:3, 3]
 
+                # world_multiple_human_3d_annot[human_name]['global_orient'] = first_cam_Rt_inv_4by4[:3, :3] @ global_orient
+                # Convert global_orient from axis-angle to rotation matrix
+                global_orient_mat = cv2.Rodrigues(global_orient)[0]  # (3,3)
+                # Multiply by first camera rotation
+                aligned_global_orient_mat = first_cam_Rt_inv_4by4[:3, :3] @ global_orient_mat
+                
+                # Convert back to axis-angle representation
+                aligned_global_orient, _ = cv2.Rodrigues(aligned_global_orient_mat)
+                # Update the global orientation
+                world_multiple_human_3d_annot[human_name]['global_orient'] = aligned_global_orient.reshape(-1)
 
-        # TEMPORARY CODE FOR VISUALIZATION
-        import smplx
-        import matplotlib.pyplot as plt
-        from collections import defaultdict
-        device = 'cuda'
-        # for visualization, transform the human parameters to each camera frame and project to 2D and draw 2D keypoints and save them
-        smpl_model_dir = '/home/hongsuk/projects/egohumans/egohumans/external/cliff/common/../data'
-        smpl_model = smplx.create(smpl_model_dir, "smpl").to(device)
-        smpl_model = smpl_model.float()
+                # Save the root translation
+                # first decode the smplx parameters
+                smpl_output = self.smpl_model(betas=torch.from_numpy(smplx_3d_params['betas'])[None, :].float(),
+                                            body_pose=torch.from_numpy(smplx_3d_params['body_pose'])[None, :].float(),
+                                            global_orient=torch.from_numpy(smplx_3d_params['global_orient'])[None, :].float(),
+                                            pose2rot=True,
+                                            transl=torch.zeros((1, 3)))
+
+                smpl_joints = smpl_output.joints.detach().squeeze(0).cpu().numpy()
+                root_joint_coord = smpl_joints[0:1, :3]
+                world_multiple_human_3d_annot[human_name]['root_transl'] = \
+                    np.dot(first_cam_Rt_inv_4by4[:3, :3], root_joint_coord.transpose(1, 0)).transpose(1, 0) + first_cam_Rt_inv_4by4[:3, :3] @ transl + first_cam_Rt_inv_4by4[:3, 3]
+
+        """
+        # # TEMPORARY CODE FOR VISUALIZATION
+        # import smplx
+        # import matplotlib.pyplot as plt
+        # from collections import defaultdict
+        # device = 'cuda'
+        # # for visualization, transform the human parameters to each camera frame and project to 2D and draw 2D keypoints and save them
+        # smpl_model_dir = '/home/hongsuk/projects/egohumans/egohumans/external/cliff/common/../data'
+        # smpl_model = smplx.create(smpl_model_dir, "smpl").to(device)
+        # smpl_model = smpl_model.float()
         
-
         vis_data = defaultdict(dict)
         for human_name, world_data_human in world_multiple_human_3d_annot.items():
 
@@ -395,7 +430,8 @@ class EgoHumansDataset(Dataset):
             # compenstate rotation (translation from origin to root joint was not cancled)
             smpl_joints = smpl_output.joints.detach().squeeze(0).cpu().numpy()
             root_joint_coord = smpl_joints[0:1, :3]
-            smpl_trans = world_data_human['transl'].reshape(1, 3) - root_joint_coord + np.dot(first_cam_Rt_inv_4by4[:3, :3], root_joint_coord.transpose(1, 0)).transpose(1, 0)
+            # smpl_trans = world_data_human['transl'].reshape(1, 3) - root_joint_coord + np.dot(first_cam_Rt_inv_4by4[:3, :3], root_joint_coord.transpose(1, 0)).transpose(1, 0)
+            smpl_trans = world_multiple_human_3d_annot[human_name]['root_transl'] - root_joint_coord
 
             smpl_vertices = smpl_output.vertices.detach().squeeze(0).cpu().numpy()
             smpl_vertices += smpl_trans
@@ -407,7 +443,7 @@ class EgoHumansDataset(Dataset):
                 intrinsic = cameras[cam]['K']
                 # convert the smpl_joitns in world coordinates to camera coordinates
                 # smpl_joints are in world coordinates and they are numpy arrays
-                points_cam = world2cam_4by4 @ np.concatenate((smpl_joints, np.ones((smpl_joints.shape[0], 1))), axis=1).T # (4, J)
+                points_cam = world2cam_4by4 @ np.concatenate((smpl_vertices, np.ones((smpl_vertices.shape[0], 1))), axis=1).T # (4, J)
                 points_cam = points_cam[:3, :].T # (J, 3)
 
                 points_img = vec_image_from_cam(intrinsic, points_cam) # (J, 2)
@@ -679,9 +715,6 @@ class EgoHumansDataset(Dataset):
             'multiview_images': multiview_images, # for Dust3R network inference
             'multiview_affine_transforms': multiview_affine_transforms,
             'multiview_cameras': cameras, # groundtruth camera parameters
-            'world_multiple_human_3d_annot': world_multiple_human_3d_annot, # groundtruth 3D annotations
-            # 'multihmr_first_cam_input_image': multihmr_first_cam_input_image, # for MultiHMR inference
-            # 'multihmr_intrinsic': multihmr_first_cam_intrinsic, # for MultiHMR inference
             'sequence': seq,
             'frame': frame
         }
@@ -691,12 +724,10 @@ class EgoHumansDataset(Dataset):
             data['dust3r_network_output'] = dust3r_network_output
         if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None:
             data['dust3r_ga_output'] = dust3r_ga_output
-        # if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None and self.multihmr_output_path is not None:
-        #     data['multihmr_output'] = multihmr_output_dict
         if self.optimize_human:
             data['multiview_multiple_human_cam_pred'] = multiview_multiple_human_cam_pred # predicted 2D + 3D parameters
             data['multiview_multiple_human_2d_cam_annot'] = multiview_multiple_human_2d_cam_annot # groundtruth 2D annotations
-
+            data['world_multiple_human_3d_annot'] = world_multiple_human_3d_annot # groundtruth 3D annotations for evaluation
 
         return data
 
@@ -1066,7 +1097,7 @@ def get_multihmr_camera_parameters(img_size, fov=60, p_x=None, p_y=None):
 
     return K
 
-def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[]):
+def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[]):
     """
     Create a dataloader for the multiview human dataset
     
@@ -1085,6 +1116,7 @@ def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=Non
         dust3r_raw_output_dir=dust3r_raw_output_dir,
         dust3r_ga_output_dir=dust3r_ga_output_dir,
         multihmr_output_path=multihmr_output_path,
+        vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir,
         split=split,
         subsample_rate=subsample_rate,
         cam_names=cam_names,

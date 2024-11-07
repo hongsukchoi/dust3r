@@ -1,4 +1,5 @@
 import os
+import os.path as osp
 import numpy as np
 import copy
 import pickle
@@ -17,17 +18,19 @@ from dust3r.utils.image import load_images
 from hongsuk_egohumans_dataloader import create_dataloader
 
 
-def main(output_path: str = './outputs/egohumans'):
-    Path(output_path).mkdir(parents=True, exist_ok=True)
+def main(output_dir: str = './outputs/egohumans/', egohumans_data_root: str = './data/egohumans_data'):
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # EgoHumans data
     # Fix batch size to 1 for now
-    egohumans_data_root = './data/egohumans_data' #'/home/hongsuk/projects/egohumans/data'
+    selected_big_seq_list = []
     cam_names = None # ['cam01', 'cam02', 'cam03', 'cam04']
-    num_of_cams = 6
-    output_dir = f'./outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
+    num_of_cams = 10 # 2, 3, 4, 5, 10
+    subsample_rate = 100
+    output_dir = osp.join(output_dir, 'dust3r_raw_outputs', 'dust3r_raw_outputs_random_sampled_views', f'num_of_cams{num_of_cams}')
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    dataset, dataloader = create_dataloader(egohumans_data_root, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list)
 
-    dataset, dataloader = create_dataloader(egohumans_data_root, batch_size=1, split='test', subsample_rate=10, cam_names=cam_names)
 
     # Dust3r parameters
     device = 'cuda'
@@ -35,7 +38,7 @@ def main(output_path: str = './outputs/egohumans'):
     scenegraph_type = 'complete'
     winsize = 1
     refid = 0
-    model_path = '/home/hongsuk/projects/SimpleCode/multiview_world/checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth'
+    model_path = './checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth'
 
     # get dust3r network model
     from dust3r.model import AsymmetricCroCo3DStereo
@@ -43,6 +46,9 @@ def main(output_path: str = './outputs/egohumans'):
 
     total_output = {}
     for i, sample in tqdm.tqdm(enumerate(dataloader), total=len(dataloader)):
+        # TEMP
+        if i < 510:
+            continue
         cam_names = sorted(sample['multiview_images'].keys())
 
         imgs = [sample['multiview_images'][cam_name] for cam_name in cam_names]
