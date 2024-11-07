@@ -257,88 +257,111 @@ def project_points(world2cam_4by4, intrinsics, points, device='cuda'):
     points_img = points_img.permute(0, 2, 1) # (N, J, 2)
     return points_img
 
-def get_human_loss(smplx_layer, humans_optim_target_dict, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, shape_prior_weight=0, device='cuda'):
+def get_human_loss(smplx_layer_dict, humans_optim_target_dict, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, shape_prior_weight=0, device='cuda'):
     # multiview_multiperson_poses2d: Dict[human_name -> Dict[cam_name -> (J, 3)]]
     # multiview_multiperson_bboxes: Dict[human_name -> Dict[cam_name -> (5)]]
     # multiview_world2cam_4by4: (N, 4, 4), multiview_intrinsics: (N, 3, 3)
-    # num_cams can be different from the number of cameras (N) in the scene because some humans might not be detected in some cameras
 
     # save the 2D joints for visualization
-    projected_joints = defaultdict(dict) # Dict[cam_name -> Dict[human_name -> (J, 3)]]
+    projected_joints = defaultdict(dict)
 
-    # define different loss per view; factors are the inverse of the area of the bbox and the human detection score
-    human_loss = 0
-    for human_name, optim_target_dict in humans_optim_target_dict.items():
-        # get the 2D joints in the image plane and the loss weights per joint
-        multiview_poses2d = multiview_multiperson_poses2d[human_name] # Dict[cam_name -> (J, 3)]
-        multiview_bboxes = multiview_multiperson_bboxes[human_name] # Dict[cam_name -> (5)]
+    # Collect all human parameters into batched tensors
+    human_names = list(humans_optim_target_dict.keys())
+    batch_size = len(human_names)
 
-        # extract data from the optim_target_dict
-        body_pose = optim_target_dict['body_pose'].reshape(1, -1)
-        betas = optim_target_dict['betas'].reshape(1, -1)
-        global_orient = optim_target_dict['global_orient'].reshape(1, -1)
-        left_hand_pose = optim_target_dict['left_hand_pose'].reshape(1, -1)
-        right_hand_pose = optim_target_dict['right_hand_pose'].reshape(1, -1)
+    # # define the smplx layer
+    # smplx_layer = smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = batch_size).to(device)
+    smplx_layer = smplx_layer_dict[batch_size]
 
-        # decode the smpl mesh and joints
-        smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose)
+    # Batch all SMPL parameters
+    body_pose = torch.cat([humans_optim_target_dict[name]['body_pose'].reshape(1, -1) for name in human_names], dim=0)
+    betas = torch.cat([humans_optim_target_dict[name]['betas'].reshape(1, -1) for name in human_names], dim=0)
+    global_orient = torch.cat([humans_optim_target_dict[name]['global_orient'].reshape(1, -1) for name in human_names], dim=0)
+    left_hand_pose = torch.cat([humans_optim_target_dict[name]['left_hand_pose'].reshape(1, -1) for name in human_names], dim=0)
+    right_hand_pose = torch.cat([humans_optim_target_dict[name]['right_hand_pose'].reshape(1, -1) for name in human_names], dim=0)
+    root_transl = torch.cat([humans_optim_target_dict[name]['root_transl'].reshape(1, 1, -1) for name in human_names], dim=0)
 
-        # Add root translation to the joints
-        root_transl = optim_target_dict['root_transl'].reshape(1, 1, -1)
-        smplx_j3d = smplx_output.joints # (1, J, 3), joints in the world coordinate from the world mesh decoded by the optimizing parameters
-        smplx_j3d = smplx_j3d - smplx_j3d[:, 0:1, :] + root_transl # !ALWAYS! Fuck the params['transl']
+    # Forward pass through SMPL-X model for all humans at once
+    smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose)
 
-        # get the joint loss weight factors
-        multiview_poses2d_refactored = []
-        multiview_loss_weights = []
-        multiview_bbox_areas = 0
-        sampled_cam_indices = []
-        for cam_name, bbox in multiview_bboxes.items():
+    # Add root translation to joints
+    smplx_j3d = smplx_output.joints  # (B, J, 3)
+    smplx_j3d = smplx_j3d - smplx_j3d[:, 0:1, :] + root_transl  # (B, J, 3)
+
+    # Project joints to all camera views at once
+    # Reshape for batch projection
+    B, J, _ = smplx_j3d.shape
+    N = len(cam_names)
+    
+    # Expand camera parameters to match batch size
+    world2cam_expanded = multiview_world2cam_4by4.unsqueeze(0).expand(B, -1, -1, -1)  # (B, N, 4, 4)
+    intrinsics_expanded = multiview_intrinsics.unsqueeze(0).expand(B, -1, -1, -1)  # (B, N, 3, 3)
+    
+    # Expand joints to match number of cameras
+    smplx_j3d_expanded = smplx_j3d.unsqueeze(1).expand(-1, N, -1, -1)  # (B, N, J, 3)
+    
+    # Project all joints at once
+    points_homo = torch.cat((smplx_j3d_expanded, torch.ones((B, N, J, 1), device=device)), dim=3)  # (B, N, J, 4)
+    points_cam = torch.matmul(world2cam_expanded, points_homo.transpose(2, 3))  # (B, N, 4, J)
+    points_img = torch.matmul(intrinsics_expanded, points_cam[:, :, :3, :])  # (B, N, 3, J)
+    points_img = points_img[:, :, :2, :] / points_img[:, :, 2:3, :]  # (B, N, 2, J)
+    points_img = points_img.transpose(2, 3)  # (B, N, J, 2)
+
+    # Initialize total loss
+    total_loss = 0
+
+    # Process each human's loss in parallel
+    for human_idx, human_name in enumerate(human_names):
+        # Get camera indices and loss weights for this human
+        cam_indices = []
+        loss_weights = []
+        poses2d = []
+        bbox_areas = 0
+        
+        for cam_name, bbox in multiview_multiperson_bboxes[human_name].items():
             bbox_area = bbox[2] * bbox[3]
             det_score = bbox[4]
-            multiview_loss_weights.append(det_score / bbox_area)
-            multiview_bbox_areas += bbox_area
-            sampled_cam_indices.append(cam_names.index(cam_name))
-            multiview_poses2d_refactored.append(multiview_multiperson_poses2d[human_name][cam_name])
-        multiview_loss_weights = torch.stack(multiview_loss_weights).float() # * multiview_bbox_areas   # (num_cams,)
-        multiview_poses2d = torch.stack(multiview_poses2d_refactored).float() # (num_cams, J, 3)
+            loss_weights.append(det_score / bbox_area)
+            bbox_areas += bbox_area
+            cam_indices.append(cam_names.index(cam_name))
+            poses2d.append(multiview_multiperson_poses2d[human_name][cam_name])
 
-        # project the joints to different views
-        multiview_smplx_j2d = project_points(multiview_world2cam_4by4[sampled_cam_indices], multiview_intrinsics[sampled_cam_indices], smplx_j3d, device=device) # (num_cams, J, 2)
+        loss_weights = torch.stack(loss_weights).float().to(device)
+        poses2d = torch.stack(poses2d).float().to(device)  # (num_cams, J, 3)
 
-        # map the multihmr 2d pred to the COCO_WHOLEBODY_KEYPOINTS
-        multiview_smplx_j2d_coco_ordered = torch.zeros(len(multiview_smplx_j2d), len(COCO_WHOLEBODY_KEYPOINTS), 3, device=device, dtype=torch.float32)
+        # Get projected joints for this human
+        human_proj_joints = points_img[human_idx, cam_indices]  # (num_cams, J, 2)
+
+        # Create COCO ordered joints
+        human_proj_joints_coco = torch.zeros(len(cam_indices), len(COCO_WHOLEBODY_KEYPOINTS), 3, device=device, dtype=torch.float32)
         for i, joint_name in enumerate(COCO_WHOLEBODY_KEYPOINTS):
             if joint_name in ORIGINAL_SMPLX_JOINT_NAMES:
-                multiview_smplx_j2d_coco_ordered[:, i, :2] = multiview_smplx_j2d[:, ORIGINAL_SMPLX_JOINT_NAMES.index(joint_name), :2]
-                multiview_smplx_j2d_coco_ordered[:, i, 2] = 1 # for validity check. 1 if the joint is valid, 0 otherwise
+                human_proj_joints_coco[:, i, :2] = human_proj_joints[:, ORIGINAL_SMPLX_JOINT_NAMES.index(joint_name), :2]
+                human_proj_joints_coco[:, i, 2] = 1
 
-        multiview_smplx_j2d_coco_ordered[:, :COCO_WHOLEBODY_KEYPOINTS.index('right_heel')+1, 2] *= 100 # main body joints are weighted 10 times more
-        # multiview_multihmr_j2d_transformed[:, COCO_WHOLEBODY_KEYPOINTS.index('right_heel')+1:, 2] = 0 # ignore non-main body joints
+        # Weight main body joints more heavily
+        human_proj_joints_coco[:, :COCO_WHOLEBODY_KEYPOINTS.index('right_heel')+1, 2] *= 100
 
-        # compute the hubor loss using Pytorch between multiview_multihmr_j2d_transformed and multiview_poses2d
-        # one_human_loss = multiview_loss_weights[:, None, None].repeat(1, multiview_smplx_j2d_coco_ordered.shape[1], 1) \
-        # * multiview_smplx_j2d_coco_ordered[:, :, 2:] * multiview_poses2d[:, :, 2:] \
-        # * F.smooth_l1_loss(multiview_smplx_j2d_coco_ordered[:, :, :2], multiview_poses2d[:, :, :2], reduction='none').mean(dim=-1, keepdim=True)
+        # Get only main body keypoints
+        human_proj_joints_coco = human_proj_joints_coco[:, coco_main_body_joint_idx, :]
+        poses2d = poses2d[:, coco_main_body_joint_idx, :]
 
-        # TEMP; just use main keypoints
-        multiview_smplx_j2d_coco_ordered = multiview_smplx_j2d_coco_ordered[:, coco_main_body_joint_idx, :]
-        multiview_poses2d = multiview_poses2d[:, coco_main_body_joint_idx, :]
-        # Compute the l2 
-        one_human_loss = multiview_loss_weights[:, None, None].repeat(1, multiview_smplx_j2d_coco_ordered.shape[1], 1) \
-        * multiview_smplx_j2d_coco_ordered[:, :, 2:] * multiview_poses2d[:, :, 2:] \
-        * F.mse_loss(multiview_smplx_j2d_coco_ordered[:, :, :2], multiview_poses2d[:, :, :2], reduction='none').mean(dim=-1, keepdim=True)
+        # Compute MSE loss with weights
+        one_human_loss = loss_weights[:, None, None].repeat(1, human_proj_joints_coco.shape[1], 1) \
+            * human_proj_joints_coco[:, :, 2:] * poses2d[:, :, 2:] \
+            * F.mse_loss(human_proj_joints_coco[:, :, :2], poses2d[:, :, :2], reduction='none').mean(dim=-1, keepdim=True)
 
-        human_loss += one_human_loss.mean()
-        if shape_prior_weight > 0:
-            # L2 loss to regularize the shape vector
-            human_loss += shape_prior_weight * F.mse_loss(betas, torch.zeros_like(betas))
+        total_loss += one_human_loss.mean()
 
-        # for visualization purpose
-        for idx, sam_cam_idx in enumerate(sampled_cam_indices):
-            projected_joints[cam_names[sam_cam_idx]][human_name] = multiview_smplx_j2d_coco_ordered[idx]
+        # Store projected joints for visualization
+        for idx, cam_idx in enumerate(cam_indices):
+            projected_joints[cam_names[cam_idx]][human_name] = human_proj_joints_coco[idx]
 
-    return human_loss, projected_joints
+    # Add shape prior if requested
+    if shape_prior_weight > 0:
+        total_loss += shape_prior_weight * F.mse_loss(betas, torch.zeros_like(betas))
+
+    return total_loss, projected_joints
 
 def estimate_initial_trans(joints3d, joints2d, focal, princpt, skeleton):
     """
@@ -645,6 +668,11 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
     vis_output_path = osp.join(output_dir, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
 
+    # Parameters I am tuning
+    human_loss_weight = 1.0
+    stage2_start_idx_percentage = 0.5
+    stage3_start_idx_percentage = 0.75
+
     # EgoHumans data
     # Fix batch size to 1 for now   
     selected_big_seq_list = sel_big_seqs #['03_fencing'] # #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
@@ -663,7 +691,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
     device = 'cuda'
     silent = False
     schedule = 'linear'
-    niter = 100 #500
+    niter = 500
     lr = 0.01
     lr_base = lr
     lr_min = 0.0001
@@ -674,20 +702,26 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
 
     # Human related Config
     shape_prior_weight = 1.0
-    human_loss_weight = 5.0
     human_lr = lr * 1.0 # not really used; to use modify the adjust_lr function; define different learning rate for the human parameters
-    smplx_layer = smplx.create(
-        model_path = '/home/hongsuk/projects/egoexo/essentials/body_models',
-        model_type = 'smplx',
-        gender = 'neutral',
-        use_pca = False,
-        num_pca_comps = 45,
-        flat_hand_mean = True,
-        use_face_contour = True,
-        num_betas = 10,
-        batch_size = 1,
-    ) # for Pred
-    smplx_layer = smplx_layer.to(device)
+    # smplx_layer = smplx.create(
+    #     model_path = '/home/hongsuk/projects/egoexo/essentials/body_models',
+    #     model_type = 'smplx',
+    #     gender = 'neutral',
+    #     use_pca = False,
+    #     num_pca_comps = 45,
+    #     flat_hand_mean = True,
+    #     use_face_contour = True,
+    #     num_betas = 10,
+    #     batch_size = 1,
+    # ) # for Pred
+    # smplx_layer = smplx_layer.to(device)
+    smplx_layer_dict = {
+        1: smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 1).to(device),
+        2: smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 2).to(device),
+        3: smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 3).to(device),
+        4: smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 4).to(device),
+    }
+    smplx_layer = smplx_layer_dict[1]
     smpl_layer = smplx.create('./models', "smpl") # for GT
     smpl_layer = smpl_layer.to(device).float()
 
@@ -792,7 +826,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
         human_params_names_to_optimize = []
 
         human_params, human_inited_cam_poses, first_cam_human_vertices = \
-            init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_multiperson_poses2d, init_focal_length, init_princpt, device, get_vertices=vis) # dict of human parameters
+            init_human_params(smplx_layer_dict[1], multiview_multiple_human_cam_pred, multiview_multiperson_poses2d, init_focal_length, init_princpt, device, get_vertices=vis) # dict of human parameters
         for human_name, optim_target_dict in human_params.items():
             for param_name in optim_target_dict.keys():
                 if optim_target_dict[param_name].requires_grad:
@@ -820,7 +854,9 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
                 scale = dist_ratio
             else:
                 print("Not enough camera locations to perform Procrustes alignment or distance ratio calculation")
-                scale = 100.0
+                scale = 80.0
+            # Scale little bit larget to ensure humans are inside the views
+            scale = scale * 1.5
         except:
             print("Error in Procrustes alignment or distance ratio calculation due to zero division...")
             print(f"Skipping this sample {sample['sequence']}_{sample['frame']}_{''.join(cam_names)}...")
@@ -889,13 +925,13 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
 
         # 1st stage; optimize the human root translation, shape (beta), and global orientation parameters
         # stage 1 is from 0% to 30%
-        stage1_iter = list(range(0, int(niter * 0.3)))
+        stage1_iter = list(range(0, int(niter * stage2_start_idx_percentage)))
         # 2nd stage; optimize the human body pose, hand poses, + 1st stage params
         # stage 2 is from 30% to 60%
-        stage2_iter = list(range(int(niter * 0.3), int(niter * 0.6)))
+        stage2_iter = list(range(int(niter * stage2_start_idx_percentage), int(niter * stage3_start_idx_percentage)))
         # 3rd stage; optimize human parameters and scene parameters
         # stage 3 is from 60% to 100%
-        stage3_iter = list(range(int(niter * 0.6), niter))
+        stage3_iter = list(range(int(niter * stage3_start_idx_percentage), niter))
 
         # Given the number of iterations, run the optimizer while forwarding the scene with the current parameters to get the loss
         with tqdm.tqdm(total=niter) as bar:
@@ -921,7 +957,8 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: list = [], opti
 
                 # get human loss
                 human_loss_timer.tic()
-                human_loss, projected_joints = get_human_loss(smplx_layer, human_params, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, shape_prior_weight, device)
+                # TEMP; define smplx layer every iter
+                human_loss, projected_joints = get_human_loss(smplx_layer_dict, human_params, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, shape_prior_weight, device)
                 human_loss_timer.toc()
 
                 loss = human_loss_weight * human_loss 
