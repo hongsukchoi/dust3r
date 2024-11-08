@@ -31,7 +31,7 @@ for coco_idx, coco_name in enumerate(COCO_WHOLEBODY_KEYPOINTS):
         smpl_to_coco_mapping[coco_idx] = smpl_idx
 
 class EgoHumansDataset(Dataset):
-    def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
+    def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
         """
         Args:
             data_root (str): Root directory of the dataset
@@ -123,12 +123,14 @@ class EgoHumansDataset(Dataset):
 
         # Setup the VitPose / HMR2 / HAMER outputs 
         self.vitpose_hmr2_hamer_output_dir = vitpose_hmr2_hamer_output_dir ## '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready'
-        if self.vitpose_hmr2_hamer_output_dir is not None:
+        self.identified_vitpose_hmr2_hamer_output_dir = identified_vitpose_hmr2_hamer_output_dir
+        if self.identified_vitpose_hmr2_hamer_output_dir is not None or self.vitpose_hmr2_hamer_output_dir is not None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             import smplx
             # for visualization, transform the human parameters to each camera frame and project to 2D and draw 2D keypoints and save them
             smpl_model_dir = './models' #'/home/hongsuk/projects/egohumans/egohumans/external/cliff/common/../data'
             smpl_model = smplx.create(smpl_model_dir, "smpl")
-            smpl_model = smpl_model.float()
+            smpl_model = smpl_model.float().to(self.device)
             self.smpl_model = smpl_model
 
         # Load multihmr output
@@ -350,6 +352,12 @@ class EgoHumansDataset(Dataset):
                         'img_path': img_path,
                         'colmap_dir': colmap_dir
                     }
+
+                    if self.identified_vitpose_hmr2_hamer_output_dir is not None:
+                        identified_vitpose_hmr2_hamer_output_path = os.path.join(self.identified_vitpose_hmr2_hamer_output_dir, big_seq_name, small_seq, camera_name,\
+                             f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
+                        per_frame_data['annot_and_img_paths'][camera_name]['identified_vitpose_hmr2_hamer_output_path'] = identified_vitpose_hmr2_hamer_output_path
+
                     # do this in __getitem__
                     # pose2d_annot = np.load(pose2d_annot_path, allow_pickle=True)
                     # bbox_annot = np.load(bbox_annot_path, allow_pickle=True)
@@ -386,9 +394,6 @@ class EgoHumansDataset(Dataset):
             cameras[cam]['cam2world_4by4'] = new_cam_Rt_4by4
 
         """ load 3d world annot; GT parameters """
-        # TEMP
-        device = 'cuda'
-        self.smpl_model = self.smpl_model.to(device)
         if self.optimize_human: # GT paramaters for evaluation
             # for scene structure evaluation
             colmap_dir = sample['annot_and_img_paths'][first_cam]['colmap_dir']
@@ -420,65 +425,55 @@ class EgoHumansDataset(Dataset):
 
                 # Save the root translation
                 # first decode the smplx parameters
-                smpl_output = self.smpl_model(betas=torch.from_numpy(smplx_3d_params['betas'])[None, :].float().to(device),
-                                            body_pose=torch.from_numpy(smplx_3d_params['body_pose'])[None, :].float().to(device),
-                                            global_orient=torch.from_numpy(smplx_3d_params['global_orient'])[None, :].float().to(device),
+                smpl_output = self.smpl_model(betas=torch.from_numpy(smplx_3d_params['betas'])[None, :].float().to(self.device),
+                                            body_pose=torch.from_numpy(smplx_3d_params['body_pose'])[None, :].float().to(self.device),
+                                            global_orient=torch.from_numpy(smplx_3d_params['global_orient'])[None, :].float().to(self.device),
                                             pose2rot=True,
-                                            transl=torch.zeros((1, 3)).to(device))
+                                            transl=torch.zeros((1, 3)).to(self.device))
 
                 smpl_joints = smpl_output.joints.detach().squeeze(0).cpu().numpy()
                 root_joint_coord = smpl_joints[0:1, :3]
                 world_multiple_human_3d_annot[human_name]['root_transl'] = \
                     np.dot(first_cam_Rt_inv_4by4[:3, :3], root_joint_coord.transpose(1, 0)).transpose(1, 0) + first_cam_Rt_inv_4by4[:3, :3] @ transl + first_cam_Rt_inv_4by4[:3, 3]
 
-            #"""
-            # TEMPORARY CODE FOR VISUALIZATION
-            # import smplx
-            # import matplotlib.pyplot as plt
-            # from collections import defaultdict
-            # device = 'cuda'
-            # # for visualization, transform the human parameters to each camera frame and project to 2D and draw 2D keypoints and save them
-            # smpl_model_dir = '/home/hongsuk/projects/egohumans/egohumans/external/cliff/common/../data'
-            # smpl_model = smplx.create(smpl_model_dir, "smpl").to(device)
-            # smpl_model = smpl_model.float()
-            
-            multiview_multiple_human_3d_world_projceted_annot = defaultdict(dict)
-            for human_name, world_data_human in world_multiple_human_3d_annot.items():
-                # first decode the smplx parameters
-                smpl_output = self.smpl_model(betas=torch.from_numpy(world_data_human['betas'])[None, :].to(device).float(),
-                                            body_pose=torch.from_numpy(world_data_human['body_pose'])[None, :].to(device).float(),
-                                            global_orient=torch.from_numpy(world_data_human['global_orient'])[None, :].to(device).float(),
-                                            pose2rot=True,
-                                            transl=torch.zeros((1, 3), device=device))
-                                            # transl=torch.from_numpy(world_data_human['transl'])[None, :].to(device).float())
+            if self.identified_vitpose_hmr2_hamer_output_dir is None:
+                multiview_multiple_human_3d_world_projceted_annot = defaultdict(dict)
+                for human_name, world_data_human in world_multiple_human_3d_annot.items():
+                    # first decode the smplx parameters
+                    smpl_output = self.smpl_model(betas=torch.from_numpy(world_data_human['betas'])[None, :].to(self.device).float(),
+                                                body_pose=torch.from_numpy(world_data_human['body_pose'])[None, :].to(self.device).float(),
+                                                global_orient=torch.from_numpy(world_data_human['global_orient'])[None, :].to(self.device).float(),
+                                                pose2rot=True,
+                                                transl=torch.zeros((1, 3), device=self.device))
+                                                # transl=torch.from_numpy(world_data_human['transl'])[None, :].to(self.device).float())
 
-                # compenstate rotation (translation from origin to root joint was not cancled)
-                smpl_joints = smpl_output.joints.detach().squeeze(0).cpu().numpy()
-                root_joint_coord = smpl_joints[0:1, :3]
-                # smpl_trans = world_data_human['transl'].reshape(1, 3) - root_joint_coord + np.dot(first_cam_Rt_inv_4by4[:3, :3], root_joint_coord.transpose(1, 0)).transpose(1, 0)
-                smpl_trans = world_multiple_human_3d_annot[human_name]['root_transl'] - root_joint_coord
+                    # compenstate rotation (translation from origin to root joint was not cancled)
+                    smpl_joints = smpl_output.joints.detach().squeeze(0).cpu().numpy()
+                    root_joint_coord = smpl_joints[0:1, :3]
+                    # smpl_trans = world_data_human['transl'].reshape(1, 3) - root_joint_coord + np.dot(first_cam_Rt_inv_4by4[:3, :3], root_joint_coord.transpose(1, 0)).transpose(1, 0)
+                    smpl_trans = world_multiple_human_3d_annot[human_name]['root_transl'] - root_joint_coord
 
-                smpl_vertices = smpl_output.vertices.detach().squeeze(0).cpu().numpy()
-                smpl_vertices += smpl_trans
-                smpl_joints += smpl_trans
+                    smpl_vertices = smpl_output.vertices.detach().squeeze(0).cpu().numpy()
+                    smpl_vertices += smpl_trans
+                    smpl_joints += smpl_trans
 
-                for cam in sorted(cameras.keys()):
-                    cam2world_4by4 = cameras[cam]['cam2world_4by4']
-                    world2cam_4by4 = np.linalg.inv(cam2world_4by4)
-                    intrinsic = cameras[cam]['K']
-                    # convert the smpl_joitns in world coordinates to camera coordinates
-                    # smpl_joints are in world coordinates and they are numpy arrays
-                    # points_cam = world2cam_4by4 @ np.concatenate((smpl_vertices, np.ones((smpl_vertices.shape[0], 1))), axis=1).T # (4, J)
-                    points_cam = world2cam_4by4 @ np.concatenate((smpl_joints, np.ones((smpl_joints.shape[0], 1))), axis=1).T # (4, J)
-                    points_cam = points_cam[:3, :].T # (J, 3)
+                    for cam in sorted(cameras.keys()):
+                        cam2world_4by4 = cameras[cam]['cam2world_4by4']
+                        world2cam_4by4 = np.linalg.inv(cam2world_4by4)
+                        intrinsic = cameras[cam]['K']
+                        # convert the smpl_joitns in world coordinates to camera coordinates
+                        # smpl_joints are in world coordinates and they are numpy arrays
+                        # points_cam = world2cam_4by4 @ np.concatenate((smpl_vertices, np.ones((smpl_vertices.shape[0], 1))), axis=1).T # (4, J)
+                        points_cam = world2cam_4by4 @ np.concatenate((smpl_joints, np.ones((smpl_joints.shape[0], 1))), axis=1).T # (4, J)
+                        points_cam = points_cam[:3, :].T # (J, 3)
 
-                    points_img = vec_image_from_cam(intrinsic, points_cam) # (J, 2)
+                        points_img = vec_image_from_cam(intrinsic, points_cam) # (J, 2)
 
-                    # add confidence score 1 to pose2d and bbox
-                    multiview_multiple_human_3d_world_projceted_annot[cam][human_name] = {
-                        'pose2d': np.concatenate((points_img, np.ones((points_img.shape[0], 1))), axis=1), # (J, 3)
-                        'bbox': get_bbox_from_keypoints(points_img)
-                    }
+                        # add confidence score 1 to pose2d and bbox
+                        multiview_multiple_human_3d_world_projceted_annot[cam][human_name] = {
+                            'pose2d': np.concatenate((points_img, np.ones((points_img.shape[0], 1))), axis=1), # (J, 3)
+                            'bbox': get_bbox_from_keypoints(points_img)
+                        }
 
             # # Draw keypoints on images and save them
             # for cam in multiview_multiple_human_3d_world_projceted_annot.keys():
@@ -554,7 +549,7 @@ class EgoHumansDataset(Dataset):
                 dust3r_ga_output = dust3r_ga_output_and_gt_cameras['dust3r_ga']
 
         """ load 2d annot for human optimization later; GT parameters """
-        if self.optimize_human:
+        if self.optimize_human: # not used now (Nov 7th 2024)
             multiview_multiple_human_2d_cam_annot = {}
             for camera_name in selected_cameras:
                 # Load image if it exists
@@ -621,127 +616,146 @@ class EgoHumansDataset(Dataset):
 
         """ load 2D pose and 3D mesh predictions for human optimization later; Predicted parameters """
         if self.optimize_human:
-            multiview_multiple_human_cam_pred = {}
+            if self.identified_vitpose_hmr2_hamer_output_dir is not None:
+                multiview_multiple_human_cam_pred = {}
+                for camera_name in selected_cameras:
+                    identified_vitpose_hmr2_hamer_output_path = sample['annot_and_img_paths'][camera_name]['identified_vitpose_hmr2_hamer_output_path']
+                    with open(identified_vitpose_hmr2_hamer_output_path, 'rb') as f:
+                        multiview_multiple_human_cam_pred[camera_name] = pickle.load(f)
+            else:
+                multiview_multiple_human_cam_pred = {}
 
-            for camera_name in selected_cameras:
-                # multiview_multiple_human_cam_pred[camera_name] = {}
-                # vit 2d pose pred path
-                # '/scratch/one_month/current/lmueller/egohuman/camera_ready/01_tagging/001_tagging/processed_data/humanwithhand/cam01/__vitpose.pkl
-                mono_multiple_human_2d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__vitpose.pkl')
-                with open(mono_multiple_human_2d_cam_pred_path, 'rb') as f:
-                    mono_multiple_human_2d_cam_pred_pose = pickle.load(f)
-                # the saved frame keys are 1-indexed following the image names
-                if f'{frame+1:05d}' not in mono_multiple_human_2d_cam_pred_pose.keys():
-                    print(f'Warning: no vitpose 2d pose pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
-                    continue
-                mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[f'{frame+1:05d}'] # (N, 133, 2+1)
+                for camera_name in selected_cameras:
+                    # multiview_multiple_human_cam_pred[camera_name] = {}
+                    # vit 2d pose pred path
+                    # '/scratch/one_month/current/lmueller/egohuman/camera_ready/01_tagging/001_tagging/processed_data/humanwithhand/cam01/__vitpose.pkl
+                    mono_multiple_human_2d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__vitpose.pkl')
+                    with open(mono_multiple_human_2d_cam_pred_path, 'rb') as f:
+                        mono_multiple_human_2d_cam_pred_pose = pickle.load(f)
+                    # the saved frame keys are 1-indexed following the image names
+                    if f'{frame+1:05d}' not in mono_multiple_human_2d_cam_pred_pose.keys():
+                        print(f'Warning: no vitpose 2d pose pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
+                        continue
+                    mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[f'{frame+1:05d}'] # (N, 133, 2+1)
 
 
-                # load 2d bbox pred path
-                mono_multiple_human_2d_cam_pred_bbox_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__bbox_with_score_used.pkl')
-                with open(mono_multiple_human_2d_cam_pred_bbox_path, 'rb') as f:
-                    mono_multiple_human_2d_cam_pred_bbox = pickle.load(f)
-                # the saved frame keys are 1-indexed following the image names
-                if f'{frame+1:05d}' not in mono_multiple_human_2d_cam_pred_bbox.keys():
-                    print(f'Warning: no bbox pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
-                    continue
-                mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[f'{frame+1:05d}'] # (N, 4+1)
+                    # load 2d bbox pred path
+                    mono_multiple_human_2d_cam_pred_bbox_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__bbox_with_score_used.pkl')
+                    with open(mono_multiple_human_2d_cam_pred_bbox_path, 'rb') as f:
+                        mono_multiple_human_2d_cam_pred_bbox = pickle.load(f)
+                    # the saved frame keys are 1-indexed following the image names
+                    if f'{frame+1:05d}' not in mono_multiple_human_2d_cam_pred_bbox.keys():
+                        print(f'Warning: no bbox pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
+                        continue
+                    mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[f'{frame+1:05d}'] # (N, 4+1)
 
-                # 3d mesh annot path
-                #  '/scratch/one_month/current/lmueller/egohuman/camera_ready/01_tagging/001_tagging/processed_data/humanwithhand/cam01/__hmr2_hamer_smplx.pkl'
-                mono_multiple_human_3d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__hmr2_hamer_smplx.pkl')
-                with open(mono_multiple_human_3d_cam_pred_path, 'rb') as f:
-                    mono_multiple_human_3d_cam_pred = pickle.load(f)
-                # the saved frame keys are 1-indexed following the image names
-                if f'{frame+1:05d}' not in mono_multiple_human_3d_cam_pred.keys():
-                    print(f'Warning: no hmr2_hamer 3d mesh pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
-                    continue
-                mono_multiple_human_3d_cam_pred = mono_multiple_human_3d_cam_pred[f'{frame+1:05d}']['params'] # dictionary of human parameters 
+                    # 3d mesh annot path
+                    #  '/scratch/one_month/current/lmueller/egohuman/camera_ready/01_tagging/001_tagging/processed_data/humanwithhand/cam01/__hmr2_hamer_smplx.pkl'
+                    mono_multiple_human_3d_cam_pred_path = os.path.join(self.vitpose_hmr2_hamer_output_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, 'processed_data/humanwithhand', f'{camera_name}', '__hmr2_hamer_smplx.pkl')
+                    with open(mono_multiple_human_3d_cam_pred_path, 'rb') as f:
+                        mono_multiple_human_3d_cam_pred = pickle.load(f)
+                    # the saved frame keys are 1-indexed following the image names
+                    if f'{frame+1:05d}' not in mono_multiple_human_3d_cam_pred.keys():
+                        print(f'Warning: no hmr2_hamer 3d mesh pred for {camera_name} frame {frame+1:05d}. Skipping this frame.')
+                        continue
+                    mono_multiple_human_3d_cam_pred = mono_multiple_human_3d_cam_pred[f'{frame+1:05d}']['params'] # dictionary of human parameters 
 
-                assert len(mono_multiple_human_2d_cam_pred_pose) == len(mono_multiple_human_2d_cam_pred_bbox) == len(mono_multiple_human_3d_cam_pred['body_pose']), "The number of 2D pose predictions, 2D bbox predictions, and 3D mesh predictions should match!"
-                # sanitize the mono predictions by comparing the 2D keypoints. Do NMS on the 2D keypoints and return the unique indices for the list
-                unique_mono_pred_indices = nms_unique_pose2d_indices(mono_multiple_human_2d_cam_pred_pose)
-                mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[unique_mono_pred_indices]
-                mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[unique_mono_pred_indices]
-                mono_multiple_human_3d_cam_pred = {key: mono_multiple_human_3d_cam_pred[key][unique_mono_pred_indices] for key in mono_multiple_human_3d_cam_pred.keys()}
-                # Visualization of pose2d and bbox predictions
-                # pred_pose2d = mono_multiple_human_2d_cam_pred_pose
-                # # Draw predicted keypoints in green
-                # img_path = sample['annot_and_img_paths'][camera_name]['img_path']
-                # img = cv2.imread(img_path)
-                # for i in range(len(pred_pose2d)):
-                #     pred = pred_pose2d[i]
-                #     # Draw index and assigned name
-                #     img = cv2.putText(img, f"{i}", 
-                #                     (int(pred[0, 0]), int(pred[0, 1])), 
-                #                     cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
-                #     # Draw keypoints
-                #     for kp in pred:
-                #         if kp[2] > 0:  # Only draw if confidence > 0
-                #             img = cv2.circle(img, (int(kp[0]), int(kp[1])), 3, (0, 255, 0), -1)
+                    assert len(mono_multiple_human_2d_cam_pred_pose) == len(mono_multiple_human_2d_cam_pred_bbox) == len(mono_multiple_human_3d_cam_pred['body_pose']), "The number of 2D pose predictions, 2D bbox predictions, and 3D mesh predictions should match!"
+                    # sanitize the mono predictions by comparing the 2D keypoints. Do NMS on the 2D keypoints and return the unique indices for the list
+                    unique_mono_pred_indices = nms_unique_pose2d_indices(mono_multiple_human_2d_cam_pred_pose)
+                    mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[unique_mono_pred_indices]
+                    mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[unique_mono_pred_indices]
+                    mono_multiple_human_3d_cam_pred = {key: mono_multiple_human_3d_cam_pred[key][unique_mono_pred_indices] for key in mono_multiple_human_3d_cam_pred.keys()}
+                    # Visualization of pose2d and bbox predictions
+                    # pred_pose2d = mono_multiple_human_2d_cam_pred_pose
+                    # # Draw predicted keypoints in green
+                    # img_path = sample['annot_and_img_paths'][camera_name]['img_path']
+                    # img = cv2.imread(img_path)
+                    # for i in range(len(pred_pose2d)):
+                    #     pred = pred_pose2d[i]
+                    #     # Draw index and assigned name
+                    #     img = cv2.putText(img, f"{i}", 
+                    #                     (int(pred[0, 0]), int(pred[0, 1])), 
+                    #                     cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
+                    #     # Draw keypoints
+                    #     for kp in pred:
+                    #         if kp[2] > 0:  # Only draw if confidence > 0
+                    #             img = cv2.circle(img, (int(kp[0]), int(kp[1])), 3, (0, 255, 0), -1)
 
-                #     # draw bbox
-                #     x1, y1, x2, y2, conf = mono_multiple_human_2d_cam_pred_bbox[i]
-                #     img = cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                # # save the image with the predicted keypoints
-                # file_name = os.path.basename(img_path)[:-4]
-                # cv2.imwrite(f'{camera_name}_{file_name}_pred_keypoints.png', img)
+                    #     # draw bbox
+                    #     x1, y1, x2, y2, conf = mono_multiple_human_2d_cam_pred_bbox[i]
+                    #     img = cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                    # # save the image with the predicted keypoints
+                    # file_name = os.path.basename(img_path)[:-4]
+                    # cv2.imwrite(f'{camera_name}_{file_name}_pred_keypoints.png', img)
 
-                # assign the human names to the 2d pose, 2d bbox, and 3d mesh predictions by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
-                # Use 2D annotation
-                # multiple_human_2d_cam_annot_human_names = sorted(list(multiview_multiple_human_2d_cam_annot[camera_name].keys()))
-                # multiple_human_2d_cam_annot_pose2d = np.array([multiview_multiple_human_2d_cam_annot[camera_name][human_name]['pose2d'] for human_name in multiple_human_2d_cam_annot_human_names]).astype(np.float32)
-                # multiple_human_2d_cam_annot_bbox = np.array([multiview_multiple_human_2d_cam_annot[camera_name][human_name]['bbox'] for human_name in multiple_human_2d_cam_annot_human_names]).astype(np.float32)
-                # Use projected 3D annotation
-                multiple_human_3d_world_projected_human_names = sorted(list(multiview_multiple_human_3d_world_projceted_annot[camera_name].keys()))
-                multiple_human_3d_world_projected_annot_pose2d = np.array([multiview_multiple_human_3d_world_projceted_annot[camera_name][human_name]['pose2d'] for human_name in multiple_human_3d_world_projected_human_names]).astype(np.float32)
-                multiple_human_3d_world_projected_annot_bbox = np.array([multiview_multiple_human_3d_world_projceted_annot[camera_name][human_name]['bbox'] for human_name in multiple_human_3d_world_projected_human_names]).astype(np.float32)
+                    # assign the human names to the 2d pose, 2d bbox, and 3d mesh predictions by associating the predicted 2D keypoints with the Egohuman dataset 2D keypoints
+                    # Use 2D annotation
+                    use_2d_annot = False
+                    if use_2d_annot:
+                        multiple_human_2d_cam_annot_human_names = sorted(list(multiview_multiple_human_2d_cam_annot[camera_name].keys()))
+                        multiple_human_2d_cam_annot_pose2d = np.array([multiview_multiple_human_2d_cam_annot[camera_name][human_name]['pose2d'] for human_name in multiple_human_2d_cam_annot_human_names]).astype(np.float32)
+                        multiple_human_2d_cam_annot_bbox = np.array([multiview_multiple_human_2d_cam_annot[camera_name][human_name]['bbox'] for human_name in multiple_human_2d_cam_annot_human_names]).astype(np.float32)
+                    
+                        # Use pose2d and bbox to assign human names to the predictions
+                        mono_pred_human_names = assign_human_names_to_mono_predictions(mono_multiple_human_2d_cam_pred_bbox, multiple_human_2d_cam_annot_bbox,
+                                                                                    mono_multiple_human_2d_cam_pred_pose, multiple_human_2d_cam_annot_pose2d,
+                                                                                    multiple_human_2d_cam_annot_human_names, \
+                                                                                    self.egohumans_image_size_tuple, \
+                                                                                    # cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
+                                                                                    ) 
+                    else:
+                        # Use projected 3D annotation
+                        multiple_human_3d_world_projected_human_names = sorted(list(multiview_multiple_human_3d_world_projceted_annot[camera_name].keys()))
+                        multiple_human_3d_world_projected_annot_pose2d = np.array([multiview_multiple_human_3d_world_projceted_annot[camera_name][human_name]['pose2d'] for human_name in multiple_human_3d_world_projected_human_names]).astype(np.float32)
+                        multiple_human_3d_world_projected_annot_bbox = np.array([multiview_multiple_human_3d_world_projceted_annot[camera_name][human_name]['bbox'] for human_name in multiple_human_3d_world_projected_human_names]).astype(np.float32)
 
-                # match the joint order
-                # multiple_human_3d_world_projected_annot_pose2d follows the order of SMPL joints; SMPL_45_KEYPOINTS 
-                # mono_multiple_human_2d_cam_pred_pose follows the order of 133 keypoints; COCO_WHOLEBODY_KEYPOINTS
+                        # match the joint order
+                        # multiple_human_3d_world_projected_annot_pose2d follows the order of SMPL joints; SMPL_45_KEYPOINTS 
+                        # mono_multiple_human_2d_cam_pred_pose follows the order of 133 keypoints; COCO_WHOLEBODY_KEYPOINTS
 
-                # Initialize array with zeros 
-                N = len(multiple_human_3d_world_projected_annot_pose2d)
-                mapped_annot_pose2d = np.zeros((N, len(COCO_WHOLEBODY_KEYPOINTS), 3), dtype=np.float32)
+                        # Initialize array with zeros 
+                        N = len(multiple_human_3d_world_projected_annot_pose2d)
+                        mapped_annot_pose2d = np.zeros((N, len(COCO_WHOLEBODY_KEYPOINTS), 3), dtype=np.float32)
 
-                # Create mask for valid mappings
-                valid_mask = smpl_to_coco_mapping != -1
-                valid_coco_idx = np.where(valid_mask)[0]
-                valid_smpl_idx = smpl_to_coco_mapping[valid_mask]
+                        # Create mask for valid mappings
+                        valid_mask = smpl_to_coco_mapping != -1
+                        valid_coco_idx = np.where(valid_mask)[0]
+                        valid_smpl_idx = smpl_to_coco_mapping[valid_mask]
 
-                # Batch assign all valid keypoints at once
-                mapped_annot_pose2d[:, valid_coco_idx] = multiple_human_3d_world_projected_annot_pose2d[:, valid_smpl_idx]
+                        # Batch assign all valid keypoints at once
+                        mapped_annot_pose2d[:, valid_coco_idx] = multiple_human_3d_world_projected_annot_pose2d[:, valid_smpl_idx]
 
-                # Update the reference to use mapped keypoints
-                multiple_human_3d_world_projected_annot_pose2d = mapped_annot_pose2d
-                # match the joint order
+                        # Update the reference to use mapped keypoints
+                        multiple_human_3d_world_projected_annot_pose2d = mapped_annot_pose2d
+                        # match the joint order
 
-                # Use bbox to assign human names to the predictions
-                mono_pred_human_names = assign_human_names_to_mono_predictions(mono_multiple_human_2d_cam_pred_bbox, multiple_human_3d_world_projected_annot_bbox, 
-                                                                            mono_multiple_human_2d_cam_pred_pose, multiple_human_3d_world_projected_annot_pose2d, \
-                                                                            multiple_human_3d_world_projected_human_names, \
-                                                                            self.egohumans_image_size_tuple, \
-                                                                            # cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
-                                                                            ) 
-                mono_pred_output_dict = {mono_pred_human_names[i]: # ex) 'aria01'
-                                        {
-                                            'original_index_in_mono_vitpose_pred': unique_mono_pred_indices[i], # index of the human in the original mono prediction file
-                                            'pose2d': mono_multiple_human_2d_cam_pred_pose[i], # (133, 2+1)
-                                            'bbox': mono_multiple_human_2d_cam_pred_bbox[i], # (4+1, )
-                                            'params': {key: mono_multiple_human_3d_cam_pred[key][i] for key in mono_multiple_human_3d_cam_pred.keys()} # dictionary of human parameters
-                                        } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
-                multiview_multiple_human_cam_pred[camera_name] = mono_pred_output_dict
+                        # Use pose2d and bbox to assign human names to the predictions
+                        mono_pred_human_names = assign_human_names_to_mono_predictions(mono_multiple_human_2d_cam_pred_bbox, multiple_human_3d_world_projected_annot_bbox,
+                                                                                    mono_multiple_human_2d_cam_pred_pose, multiple_human_3d_world_projected_annot_pose2d,
+                                                                                    multiple_human_3d_world_projected_human_names, \
+                                                                                    self.egohumans_image_size_tuple, \
+                                                                                    # cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
+                                                                                    ) 
 
-                # SAVE_DIR
-                # self.vitpose_hmr2_hamer_output_dir,
-                save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions')
-                mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
-                Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
-                mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
-                with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
-                    pickle.dump(mono_pred_output_dict, f)
-                print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
+                    mono_pred_output_dict = {mono_pred_human_names[i]: # ex) 'aria01'
+                                            {
+                                                'original_index_in_mono_vitpose_pred': unique_mono_pred_indices[i], # index of the human in the original mono prediction file
+                                                'pose2d': mono_multiple_human_2d_cam_pred_pose[i], # (133, 2+1)
+                                                'bbox': mono_multiple_human_2d_cam_pred_bbox[i], # (4+1, )
+                                                'params': {key: mono_multiple_human_3d_cam_pred[key][i] for key in mono_multiple_human_3d_cam_pred.keys()} # dictionary of human parameters
+                                            } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
+                    multiview_multiple_human_cam_pred[camera_name] = mono_pred_output_dict
+
+                    # # SAVE_DIR
+                    # # self.vitpose_hmr2_hamer_output_dir,
+                    # save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions')
+                    # mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
+                    # Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
+                    # mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
+                    # with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
+                    #     pickle.dump(mono_pred_output_dict, f)
+                    # print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
 
         # """ get MultiHMR output; Predicted parameters """
         # if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None and self.multihmr_output_path is not None:
@@ -787,7 +801,7 @@ class EgoHumansDataset(Dataset):
             data['dust3r_ga_output'] = dust3r_ga_output
         if self.optimize_human:
             data['multiview_multiple_human_cam_pred'] = multiview_multiple_human_cam_pred # predicted 2D + 3D parameters
-            data['multiview_multiple_human_2d_cam_annot'] = multiview_multiple_human_2d_cam_annot # groundtruth 2D annotations
+            # data['multiview_multiple_human_2d_cam_annot'] = multiview_multiple_human_2d_cam_annot # groundtruth 2D annotations
             data['world_multiple_human_3d_annot'] = world_multiple_human_3d_annot # groundtruth 3D annotations for evaluation
             data['world_colmap_pointcloud_xyz'] = points3D
             data['world_colmap_pointcloud_rgb'] = points3D_rgb
@@ -1217,7 +1231,7 @@ def get_multihmr_camera_parameters(img_size, fov=60, p_x=None, p_y=None):
 
     return K
 
-def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
+def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
     """
     Create a dataloader for the multiview human dataset
     
@@ -1237,6 +1251,7 @@ def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=Non
         dust3r_ga_output_dir=dust3r_ga_output_dir,
         multihmr_output_path=multihmr_output_path,
         vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir,
+        identified_vitpose_hmr2_hamer_output_dir=identified_vitpose_hmr2_hamer_output_dir,
         split=split,
         subsample_rate=subsample_rate,
         cam_names=cam_names,
@@ -1266,9 +1281,12 @@ if __name__ == '__main__':
     
     # Save the identified human predictions
     # '05_volleyball'
-    # ['01_tagging', '02_lego', '03_fencing']  ['04_basketball']['06_badminton']
+    # ['01_tagging', '02_lego', '03_fencing']  ['04_basketball'] '5_volleyball', ['06_badminton'] 07_tennis
+    
+    # Combine lists of sequences
+    # selected_big_seq_list = ['01_tagging', '02_lego', '03_fencing', '04_basketball', '05_volleyball', '06_badminton', '07_tennis']
     selected_big_seq_list = ['07_tennis'] # ['5_volleyball', '04_basketball'] # ['01_tagging', '02_lego', '03_fencing']  #-> might stop because of scipy infinity bug
-    selected_small_seq_start_and_end_idx_tuple = (7, 13)
+    selected_small_seq_start_and_end_idx_tuple = (1, 1)
     num_of_cams = None
     data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
     vitpose_hmr2_hamer_output_dir = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready' 

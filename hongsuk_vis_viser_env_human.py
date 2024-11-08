@@ -14,16 +14,20 @@ from scipy.spatial.transform import Rotation as R
 
 from multihmr.blocks import SMPL_Layer
 
+
+
+# Read colors from colors.txt file
+colors_path = osp.join(osp.dirname(__file__), 'colors.txt')
+colors = []
+with open(colors_path, 'r') as f:
+    for line in f:
+        # Convert each line of RGB values to a list of integers
+        rgb = list(map(int, line.strip().split()))
+        colors.append(rgb)
+COLORS = np.array(colors)
+
 def get_color(idx):
-    colors = np.array([
-        [255, 0, 0],
-        [0, 255, 0],
-        [0, 0, 255],
-        [255, 255, 0],
-        [255, 0, 255],
-        [0, 255, 255],
-    ])  
-    return colors[idx % len(colors)]
+    return COLORS[idx % len(COLORS)]
 
 def visualize_cameras_and_human(cam_poses, human_vertices, smplx_faces, world_colmap_pointcloud_xyz=None, world_colmap_pointcloud_rgb=None):
     cam_poses = copy.deepcopy(cam_poses)
@@ -42,8 +46,8 @@ def visualize_cameras_and_human(cam_poses, human_vertices, smplx_faces, world_co
     timing_handle = server.gui.add_number("Time (ms)", 0.01, disabled=True)
 
     human_idx = 0
-    for human_name, vertices in human_vertices.items():
-        vertices = vertices @ rot_180       
+    for human_name in sorted(human_vertices.keys()):
+        vertices = human_vertices[human_name] @ rot_180       
         server.scene.add_mesh_simple(
             f"/{human_name}_human/mesh",
             vertices=vertices,
@@ -207,7 +211,7 @@ def show_env_human_in_viser(world_env: dict = None, world_env_pkl: str = '', wor
 
     pointcloud_handles = []
     cam_handles = []
-    for img_idx, img_name in enumerate(world_env.keys()):
+    for img_idx, img_name in enumerate(sorted(world_env.keys())):
         if img_name == 'non_img_specific':
             continue
         # Visualize the pointcloud of environment
@@ -253,7 +257,7 @@ def show_env_human_in_viser(world_env: dict = None, world_env_pkl: str = '', wor
         cam_handles.append(cam_handle)
 
     if smplx_vertices_dict is not None:
-        for img_idx, img_name in enumerate(smplx_vertices_dict.keys()):
+        for img_idx, img_name in enumerate(sorted(smplx_vertices_dict.keys())):
             vertices = smplx_vertices_dict[img_name]
             vertices = vertices @ rot_180       
             server.scene.add_mesh_simple(
