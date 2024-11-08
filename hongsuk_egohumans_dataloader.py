@@ -746,7 +746,7 @@ class EgoHumansDataset(Dataset):
                                                 'params': {key: mono_multiple_human_3d_cam_pred[key][i] for key in mono_multiple_human_3d_cam_pred.keys()} # dictionary of human parameters
                                             } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
                     multiview_multiple_human_cam_pred[camera_name] = mono_pred_output_dict
-
+                    import pdb; pdb.set_trace()
                     # # SAVE_DIR
                     # # self.vitpose_hmr2_hamer_output_dir,
                     # save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions')
@@ -1111,6 +1111,7 @@ def load_scene_geometry(colmap_dir, max_dist=0.1):
     # https://github.com/colmap/colmap/blob/5879f41fb89d9ac71d977ae6cf898350c77cd59f/scripts/python/read_write_model.py#L308
     points3D = []
     points3D_rgb = []
+    errors = []
     with open(path, "r") as fid:
         while True:
             line = fid.readline()
@@ -1127,11 +1128,22 @@ def load_scene_geometry(colmap_dir, max_dist=0.1):
                 point2D_idxs = np.array(tuple(map(int, elems[9::2])))
                 points3D.append(xyz.reshape(1, -1))
                 points3D_rgb.append(rgb.reshape(1, -1))
+                errors.append(error)
+    
     points3D = np.concatenate(points3D, axis=0) # (N,3)
     # apply the colmap to aria01 transform to the points
     points3D = (aria01_from_colmap_transform[:3, :3] @ points3D.T + aria01_from_colmap_transform[:3, 3][:, None]).T # (N,3)
 
     points3D_rgb = np.concatenate(points3D_rgb, axis=0)
+
+    # Get the Gaussian mean and std of the errors
+    # And filter out the points with error larger than 2 std
+    mean_error = np.mean(errors)
+    std_error = np.std(errors)
+    threshold = 1 * std_error
+    valid_indices = np.where(np.abs(errors - mean_error) < threshold)[0]
+    points3D = points3D[valid_indices]
+    points3D_rgb = points3D_rgb[valid_indices]
     
     return points3D, points3D_rgb
 

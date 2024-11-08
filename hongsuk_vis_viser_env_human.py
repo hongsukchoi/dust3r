@@ -92,6 +92,7 @@ def visualize_cameras_and_human(cam_poses, human_vertices, smplx_faces, world_co
         points=world_colmap_pointcloud_xyz,
         colors=world_colmap_pointcloud_rgb,
         point_size=0.01,
+        point_shape='circle'
     )
 
     # add transform controls, initialize the location with the first two cameras
@@ -194,7 +195,7 @@ def show_env_human_in_viser(world_env: dict = None, world_env_pkl: str = '', wor
         world_env[img_name]['cam2world'][:3, 3] *= world_scale_factor
         # get new mask
         conf = world_env[img_name]['conf']
-        world_env[img_name]['msk'] = conf > 1.5
+        world_env[img_name]['msk'] = conf > 3.5
     
     # set viser
     server = viser.ViserServer()
@@ -230,6 +231,7 @@ def show_env_human_in_viser(world_env: dict = None, world_env_pkl: str = '', wor
             points=points,
             colors=colors,
             point_size=0.05,
+            point_shape='circle'
         )
         pointcloud_handles.append(pc_handle)
 
