@@ -686,74 +686,63 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
     return optim_target_dict, cam_poses, first_cam_human_vertices
 
 
-def get_stage_optimizers(human_params, scene_params, residual_scene_scale, stage: int, lr: float = 0.01, device: str = 'cuda'):
-    """Returns two optimizers: (adam_optimizer, lbfgs_optimizer)"""
-    
-    # Set which parameters to optimize for each stage
-    if stage == 1:
-        # LBFGS for human parameters
-        optimizing_human_param_names = ['root_transl', 'betas']
+def get_stage_optimizer(human_params, scene_params, residual_scene_scale, stage: int, lr: float = 0.01):
+    # 1st stage; optimize the scene scale, human root translation, shape (beta), and global orientation parameters
+    # 2nd stage; optimize the dust3r scene parameters +  human root translation, shape (beta), and global orientation
+    # 3rd stage; 2nd stage + human local poses
+    # human param names: ['root_transl', 'betas', 'global_orient', 'body_pose', 'left_hand_pose', 'right_hand_pose']
+
+    if stage == 1: # 1st
+        optimizing_param_names = ['root_transl', 'betas'] # , 'global_orient'
+
         human_params_to_optimize = []
+        human_params_names_to_optimize = []
         for human_name, optim_target_dict in human_params.items():
             for param_name in optim_target_dict.keys():
-                if param_name in optimizing_human_param_names:
+                if param_name in optimizing_param_names:
                     optim_target_dict[param_name].requires_grad = True    
                     human_params_to_optimize.append(optim_target_dict[param_name])
+                    human_params_names_to_optimize.append(f'{human_name}_{param_name}')
                 else:
                     optim_target_dict[param_name].requires_grad = False
-        
-        scene_params_to_optimize = []
-        human_params_to_optimize += [residual_scene_scale]
 
-        adam_optimizer = None
+        optimizing_params = human_params_to_optimize + [residual_scene_scale]
 
-    elif stage == 2:
-        # LBFGS for human parameters
-        optimizing_human_param_names = ['root_transl', 'betas']
+    elif stage == 2: # 2nd
+        optimizing_human_param_names = ['root_transl', 'betas', 'global_orient']
+
         human_params_to_optimize = []
+        human_params_names_to_optimize = []
         for human_name, optim_target_dict in human_params.items():
             for param_name in optim_target_dict.keys():
                 if param_name in optimizing_human_param_names:
                     optim_target_dict[param_name].requires_grad = True
                     human_params_to_optimize.append(optim_target_dict[param_name])
+                    human_params_names_to_optimize.append(f'{human_name}_{param_name}')
                 else:
                     optim_target_dict[param_name].requires_grad = False
-        
-        # Adam for scene parameters
-        scene_params_to_optimize = scene_params
 
-        # Initialize optimizers
-        adam_optimizer = torch.optim.Adam(scene_params_to_optimize, lr=lr)
+        optimizing_params = scene_params + human_params_to_optimize  # TEMP
+        # optimizing_params = human_params_to_optimize 
 
-    elif stage == 3:
-        # LBFGS for human parameters
-        optimizing_human_param_names = ['root_transl', 'betas', 'global_orient', 'body_pose']
+    elif stage == 3: # 3rd
+        optimizing_human_param_names = ['root_transl', 'betas', 'global_orient', 'body_pose', 'left_hand_pose', 'right_hand_pose']
+
         human_params_to_optimize = []
+        human_params_names_to_optimize = []
         for human_name, optim_target_dict in human_params.items():
             for param_name in optim_target_dict.keys():
                 if param_name in optimizing_human_param_names:
                     optim_target_dict[param_name].requires_grad = True
                     human_params_to_optimize.append(optim_target_dict[param_name])
+                    human_params_names_to_optimize.append(f'{human_name}_{param_name}')
                 else:
                     optim_target_dict[param_name].requires_grad = False
-        
-        # Adam for scene parameters
-        scene_params_to_optimize = scene_params
 
-        # Initialize optimizers
-        adam_optimizer = torch.optim.Adam(scene_params_to_optimize, lr=lr)
-        
-    lbfgs_optimizer = torch.optim.LBFGS(
-        human_params_to_optimize,
-        lr=lr,
-        max_iter=4,
-        tolerance_grad=1e-7,
-        tolerance_change=1e-9,
-        history_size=10,
-        line_search_fn='strong_wolfe'
-    )
-    
-    return adam_optimizer, lbfgs_optimizer
+        optimizing_params = scene_params + human_params_to_optimize
+
+    optimizer = torch.optim.Adam(optimizing_params, lr=lr, betas=(0.9, 0.9))
+    return optimizer
 
 def vis_decode_human_params_and_cameras(world_multiple_human_3d_annot, cam_poses, smpl_layer, world_colmap_pointcloud_xyz, world_colmap_pointcloud_rgb, device='cuda'):
     # human_params: Dict[human_name -> Dict[param_name -> torch.Tensor]]
@@ -822,11 +811,11 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
     # Parameters I am tuning
     human_loss_weight = 5.0
     stage2_start_idx_percentage = 0.2
-    stage3_start_idx_percentage = 0.7
-    niter = 600
+    stage3_start_idx_percentage = 0.85
+    niter = 300
     lr = 0.01
     dist_tol = 0.3
-    scale_increasing_factor = 1.2
+    scale_increasing_factor = 1.3
     # # TEMP
     # identified_vitpose_hmr2_hamer_output_dir = None
 
@@ -892,7 +881,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
             world_cam_poses[cam_name] = cam2world
         world_colmap_pointcloud_xyz = sample['world_colmap_pointcloud_xyz']
         world_colmap_pointcloud_rgb = sample['world_colmap_pointcloud_rgb']
-        if False and vis:
+        if vis:
             try:
                 vis_decode_human_params_and_cameras(world_multiple_human_3d_annot, world_cam_poses, smpl_layer, world_colmap_pointcloud_xyz, world_colmap_pointcloud_rgb, device)
             except:
@@ -1009,13 +998,18 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
                 print("Not enough camera locations to perform Procrustes alignment or distance ratio calculation")
                 scene_scale = 80.0
             # Scale little bit larget to ensure humans are inside the views
-            scene_scale = scene_scale * scale_increasing_factor
         except:
             print("Error in Procrustes alignment or distance ratio calculation due to zero division...")
             print(f"Skipping this sample {sample['sequence']}_{sample['frame']}_{''.join(cam_names)}...")
             continue
 
-        print(f"Dust3r to Human scale factor: {scene_scale}")
+        print(f"Dust3r to Human scale ratio: {scene_scale}")
+        # TEMP
+        niter = int(8 * scene_scale)
+        print(f"Set the number of iterations to {niter}; 8 * {scene_scale}")
+        scene_scale = scene_scale * scale_increasing_factor
+        print(f"Scaled Dust3r to Human scale ratio: {scene_scale}")
+
         # do the optimization again with scaled 3D points and camera poses
         pts3d_scaled = [p * scene_scale for p in pts3d]
         pts3d = pts3d_scaled
@@ -1037,7 +1031,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         scene_params = [p for p in scene.parameters() if p.requires_grad]
 
         # Visualize the initilization of 3D human and 3D world
-        if False and first_cam_human_vertices is not None:
+        if first_cam_human_vertices is not None:
             world_env = parse_to_save_data(scene, cam_names)
             try:
                 show_env_human_in_viser(world_env=world_env, world_scale_factor=1., smplx_vertices_dict=first_cam_human_vertices, smplx_faces=smplx_layer.faces)
@@ -1066,7 +1060,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         # set scene scale tolerance
         # scene_scale_tol = 0.15
         # print(f"Scene scale tolerance: {scene_scale_tol:.3f}")
-        print("Distance tolerance for camera centers: ", dist_tol)
+
 
         # 1st stage; stage 1 is from 0% to 30%
         stage1_iter = list(range(0, int(niter * stage2_start_idx_percentage)))
@@ -1081,83 +1075,135 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         # Given the number of iterations, run the optimizer while forwarding the scene with the current parameters to get the loss
         with tqdm.tqdm(total=niter) as bar:
             while bar.n < bar.total:
-                # Set optimizers
+                # Set optimizer
                 if bar.n == stage1_iter[0]:
-                    adam_optimizer, lbfgs_optimizer = get_stage_optimizers(human_params, scene_params, residual_scene_scale, 1, lr)
+                    optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 1, lr)
                     print("\n1st stage optimization starts at ", bar.n)
                 elif bar.n == stage2_iter[0]:
-                    adam_optimizer, lbfgs_optimizer = get_stage_optimizers(human_params, scene_params, residual_scene_scale, 2, lr)
+                    human_loss_weight = 10.
+                    lr_base = lr = 0.01
+                    optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 2, lr)
                     print("\n2nd stage optimization starts at ", bar.n)
-                    # Reinitialize scene if needed...
+                    # Reinitialize the scene
+                    print("Residual scene scale: ", residual_scene_scale.item())
+                    scene_intrinsics = scene.get_intrinsics().detach().cpu().numpy()
+                    im_focals = [intrinsic[0,0] for intrinsic in scene_intrinsics]
+                    im_poses = scene.get_im_poses().detach()
+                    im_poses[:, :3, 3] = im_poses[:, :3, 3] * residual_scene_scale.item()
+                    pts3d = scene.get_pts3d()
+                    pts3d_scaled = [p * residual_scene_scale.item() for p in pts3d]
+                    scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d_scaled, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+                    print("Known params init")
+                    
+                    init_cam_centers = scene.get_im_poses()[:, :3, 3].detach()  # (N, 3)
+        
+                    # Compute distances between all pairs of cameras
+                    init_cam_center_dist_total = 0
+                    init_cam_center_dist_totalpairs_dist = []
+                    for i in range(len(init_cam_centers)):
+                        for j in range(i+1, len(init_cam_centers)):
+                            dist = torch.norm(init_cam_centers[i] - init_cam_centers[j])
+                            # init_cam_center_dist_total += dist
+                            init_cam_center_dist_totalpairs_dist.append(dist)
+                    init_cam_center_dist_total = torch.stack(init_cam_center_dist_totalpairs_dist)
+                    
+                    if vis:
+                        # Visualize the initilization of 3D human and 3D world
+                        world_env = parse_to_save_data(scene, cam_names)
+                        show_optimization_results(world_env, human_params, smplx_layer_dict[1])
+
                 elif bar.n == stage3_iter[0]:
-                    adam_optimizer, lbfgs_optimizer = get_stage_optimizers(human_params, scene_params, residual_scene_scale, 3, lr)
+                    human_loss_weight = 5.
+
+                    optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 3, lr)
                     print("\n3rd stage optimization starts at ", bar.n)
 
+                    if vis:
+                        # Visualize the initilization of 3D human and 3D world
+                        world_env = parse_to_save_data(scene, cam_names)
+                        show_optimization_results(world_env, human_params, smplx_layer_dict[1])
 
-                # Define closure for LBFGS (human parameters)
-                def closure():
-                    lbfgs_optimizer.zero_grad()
-                    
-                    multiview_cam2world_4by4 = scene.get_im_poses().detach()
-                    if bar.n in stage1_iter:
-                        multiview_cam2world_3by4 = torch.cat([
-                            multiview_cam2world_4by4[:, :3, :3],
-                            (multiview_cam2world_4by4[:, :3, 3] * residual_scene_scale).unsqueeze(-1),
-                        ], dim= 2)
-                        multiview_cam2world_4by4 = torch.cat([
-                            multiview_cam2world_3by4,
-                            multiview_cam2world_4by4[:, 3:4, :]
-                        ], dim=1)
-                    
-                    multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4)
-                    multiview_intrinsics = scene.get_intrinsics().detach()
+                lr = adjust_lr(bar.n, niter, lr_base, lr_min, optimizer, schedule)
+                optimizer.zero_grad()
 
-                    # Get human loss
-                    human_loss_timer.tic()
-                    human_loss, projected_joints = get_human_loss(
-                        smplx_layer_dict, human_params, cam_names, 
-                        multiview_world2cam_4by4, multiview_intrinsics, 
-                        multiview_multiperson_poses2d, multiview_multiperson_bboxes, 
-                        shape_prior_weight, device
-                    )
-                    human_loss = human_loss_weight * human_loss
-                    human_loss_timer.toc()
-                    
-                    human_loss.backward()
-                    return human_loss
+                # get extrinsincs and intrinsics from the scene
+                multiview_cam2world_4by4  = scene.get_im_poses()  # (len(cam_names), 4, 4)
 
-                # Optimize human parameters with LBFGS
-                human_loss = lbfgs_optimizer.step(closure)
+                if bar.n in stage1_iter:
+                    multiview_cam2world_4by4 = multiview_cam2world_4by4.detach()
+                    # Create a new tensor instead of modifying in place
+                    multiview_cam2world_3by4 = torch.cat([
+                        multiview_cam2world_4by4[:, :3, :3],
+                        (multiview_cam2world_4by4[:, :3, 3] * residual_scene_scale).unsqueeze(-1)
+                    ], dim=2)
+                    multiview_cam2world_4by4 = torch.cat([
+                        multiview_cam2world_3by4,
+                        multiview_cam2world_4by4[:, 3:4, :]
+                    ], dim=1)
 
-                losses = {
-                    'human_loss': human_loss
-                }
-                # Optimize scene parameters with Adam
-                if bar.n in stage2_iter or bar.n in stage3_iter:    
-                    lr = adjust_lr(bar.n, niter, lr_base, lr_min, adam_optimizer, schedule)
+                multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
+                multiview_intrinsics = scene.get_intrinsics().detach() # (len(cam_names), 3, 3)
 
-                    adam_optimizer.zero_grad()
+                # Initialize losses dictionary
+                losses = {}
+
+                # Get human loss
+                human_loss_timer.tic()
+                losses['human_loss'], projected_joints = get_human_loss(smplx_layer_dict, human_params, cam_names, 
+                                                                      multiview_world2cam_4by4, multiview_intrinsics, 
+                                                                      multiview_multiperson_poses2d, multiview_multiperson_bboxes, 
+                                                                      shape_prior_weight, device)
+                losses['human_loss'] = human_loss_weight * losses['human_loss']
+                human_loss_timer.toc()
+
+                if bar.n in stage2_iter or bar.n in stage3_iter:
+                    # Get scene loss
                     scene_loss_timer.tic()
-                    scene_loss = scene.dust3r_loss()
+                    losses['scene_loss'] = scene.dust3r_loss()
                     scene_loss_timer.toc()
-                    scene_loss.backward()
-                    adam_optimizer.step()
 
-                    losses['scene_loss'] = scene_loss
+                    # Camera pose regularization (commented out but preserved)
+                    cam_centers = multiview_cam2world_4by4[:, :3, 3]  # (N, 3)
+                    cam_center_dist_totalpairs_dist = []
+                    for i in range(len(cam_centers)):
+                        for j in range(i+1, len(cam_centers)):
+                            dist = torch.norm(cam_centers[i] - cam_centers[j])
+                            cam_center_dist_totalpairs_dist.append(dist)
+                    cam_center_dist_total = torch.stack(cam_center_dist_totalpairs_dist)
+                    relative_dist_diff = torch.abs(cam_center_dist_total - init_cam_center_dist_total) / init_cam_center_dist_total
+                    losses['cam_pose_dist_loss'] = torch.nn.functional.relu(relative_dist_diff - dist_tol) * 100.0
+                    losses['cam_pose_dist_loss'] = torch.mean(losses['cam_pose_dist_loss'])
 
-
-                # Update progress bar
+                # Compute total loss
                 total_loss = sum(losses.values())
+
+                gradient_timer.tic()
+                total_loss.backward()
+                optimizer.step()
+                gradient_timer.toc()
+
+                # Create loss string for progress bar
                 loss_str = f'{lr=:g} '
                 loss_str += ' '.join([f'{k}={v:g}' for k, v in losses.items()])
                 loss_str += f' total_loss={total_loss:g}'
                 bar.set_postfix_str(loss_str)
                 bar.update()
 
-            # Print final loss value
-            final_loss = total_loss.item()
-            print(f"Final total loss: {final_loss:.6f}")
-            # print("Final losses:", ' '.join([f'{k}={v.item():g}' for k, v in losses.items()]))
+                if vis and bar.n % save_2d_pose_vis == 0:
+                    for cam_name, human_joints in projected_joints.items():
+                        img = scene.imgs[cam_names.index(cam_name)].copy() * 255.
+                        img = img.astype(np.uint8)
+                        for human_name, joints in human_joints.items():
+                            # darw the human name
+                            img = cv2.putText(img, human_name, (int(joints[0, 0]), int(joints[0, 1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            for idx, joint in enumerate(joints):
+                                img = cv2.circle(img, (int(joint[0]), int(joint[1])), 1, (0, 255, 0), -1)
+                                # draw the index
+                                # img = cv2.putText(img, f"{idx}", (int(joint[0]), int(joint[1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        cv2.imwrite(osp.join(vis_output_path, f'{sample["sequence"]}_{sample["frame"]}_{cam_name}_{bar.n}.png'), img[:, :, ::-1])
+                
+        print("Final losses:", ' '.join([f'{k}={v.item():g}' for k, v in losses.items()]))
+        print(f"Time taken: human_loss={human_loss_timer.total_time:g}s, scene_loss={scene_loss_timer.total_time:g}s, backward={gradient_timer.total_time:g}s")
 
         # Save output
         output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"
@@ -1179,7 +1225,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
             pickle.dump(total_output, f)
         # 
         
-        if vis:
+        if True or vis:
             show_optimization_results(total_output['dust3r_ga'], human_params, smplx_layer_dict[1])
             # smplx_vertices_dict = {}
             # for human_name, optim_target_dict in human_params.items():
