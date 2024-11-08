@@ -269,6 +269,58 @@ SMPLX_JOINT_NAMES = [
     'right_lip_3'
 ] # ORIGINAL_SMPLX_JOINT_NAMES[:127]
 
+SMPL_KEYPOINTS = [
+    'pelvis',
+    'left_hip',
+    'right_hip',
+    'spine1',
+    'left_knee',
+    'right_knee',
+    'spine2',
+    'left_ankle',
+    'right_ankle',
+    'spine3',
+    'left_foot',
+    'right_foot',
+    'neck',
+    'left_collar',
+    'right_collar',
+    'head',
+    'left_shoulder',
+    'right_shoulder',
+    'left_elbow',
+    'right_elbow',
+    'left_wrist',
+    'right_wrist',
+    'left_hand_root',
+    'right_hand_root',
+]
+
+# the full keypoints produced by the default SMPL J_regressor
+SMPL_45_KEYPOINTS = SMPL_KEYPOINTS + [
+    'nose',
+    'right_eye',
+    'left_eye',
+    'right_ear',
+    'left_ear',
+    'left_big_toe',
+    'left_small_toe',
+    'left_heel',
+    'right_big_toe',
+    'right_small_toe',
+    'right_heel',
+    'left_thumb',
+    'left_index',
+    'left_middle',
+    'left_ring',
+    'left_pinky',
+    'right_thumb',
+    'right_index',
+    'right_middle',
+    'right_ring',
+    'right_pinky',
+]
+
 # Original SMPLX joint names - https://github.com/vchoutas/smplx/blob/main/smplx/joint_names.py
 # face joint order: https://github.com/Rubikplayer/flame-fitting
 ORIGINAL_SMPLX_JOINT_NAMES = [
