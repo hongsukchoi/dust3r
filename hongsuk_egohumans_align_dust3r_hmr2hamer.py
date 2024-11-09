@@ -1,91 +1,3 @@
-"""
-# Data structure for total_output:
-total_output = {
-    'world_gt_cameras': {  # Ground truth camera parameters in world coordinates
-        'cam01': {
-            'cam2world_R': np.ndarray,  # shape (3, 3), rotation matrix
-            'cam2world_t': np.ndarray,  # shape (3,), translation vector
-            'K': np.ndarray,  # shape (3, 3), intrinsic matrix
-            'img_width': int,
-            'img_height': int,
-            'cam2world_4by4': np.ndarray  # shape (4, 4), homogeneous transformation matrix
-        },
-        'cam02': {...},
-        'cam03': {...},
-        'cam04': {...}
-    },
-    'world_multiple_human_3d_annot': {  # Ground truth 3D human parameters
-        'human_name': {  # e.g. 'aria01'
-            'body_pose': np.ndarray,  # SMPL body pose parameters
-            'betas': np.ndarray,  # SMPL shape parameters
-            'global_orient': np.ndarray,  # Global orientation
-            'root_transl': np.ndarray,  # Root translation
-            'transl': np.ndarray  # Translation
-        },
-        'human_name2': {...}
-    },
-    'dust3r_ga': {  # Global alignment results from DUSt3R
-        'cam01': {
-            'rgbimg': np.ndarray,  # shape (H, W, 3), RGB image
-            'intrinsic': np.ndarray,  # shape (3, 3), camera intrinsic matrix
-            'cam2world': np.ndarray,  # shape (4, 4), camera extrinsic matrix
-            'pts3d': np.ndarray,  # shape (N, 3), 3D points
-            'depths': np.ndarray,  # shape (H, W), depth map
-            'msk': np.ndarray,  # shape (H, W), mask
-            'conf': np.ndarray,  # shape (N,), confidence scores
-        },
-        'cam02': {...},
-        'cam03': {...},
-        'cam04': {...}
-    },
-    'human_params': {  # Optimized human parameters
-        'human_name': {  # e.g. 'aria01' 
-            'body_pose': np.ndarray,  # shape (1, 63), SMPL body pose parameters
-            'global_orient': np.ndarray,  # shape (1, 3), global orientation
-            'betas': np.ndarray,  # shape (1, 10), SMPL shape parameters
-            'left_hand_pose': np.ndarray,  # shape (1, 45), left hand pose parameters
-            'right_hand_pose': np.ndarray,  # shape (1, 45), right hand pose parameters
-            'root_transl': np.ndarray  # shape (1, 3), root translation
-        },
-        'human_name2': {...}
-    }
-}
-
->> How to decode GT SMPL parameters
-    body_pose = torch.from_numpy(human_params['body_pose']).reshape(1, -1).to(device).float()
-    global_orient = torch.from_numpy(human_params['global_orient']).reshape(1, -1).to(device).float()
-    betas = torch.from_numpy(human_params['betas']).reshape(1, -1).to(device).float()
-
-    smpl_output = smpl_layer(betas=betas,
-                            body_pose=body_pose,
-                            global_orient=global_orient,
-                            pose2rot=True,
-                        )
-    root_transl = human_params['root_transl'] # np.ndarray (1, 3)
-    vertices = smpl_output.vertices.detach().squeeze(0).cpu().numpy()
-    joints = smpl_output.joints.detach().squeeze(0).cpu().numpy()
-    vertices = vertices - joints[0:1:, ] + root_transl
-    world_human_vertices[human_name] = vertices
-
->> How to decode HMR2Hamer SMPL-X parameters
-# extract data from the optim_target_dict
-body_pose = optim_target_dict['body_pose'].reshape(1, -1)
-betas = optim_target_dict['betas'].reshape(1, -1)
-global_orient = optim_target_dict['global_orient'].reshape(1, -1)
-left_hand_pose = optim_target_dict['left_hand_pose'].reshape(1, -1)
-right_hand_pose = optim_target_dict['right_hand_pose'].reshape(1, -1)
-
-# decode the smpl mesh and joints
-smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose)
-
-# Add root translation to the joints
-root_transl = optim_target_dict['root_transl'].reshape(1, 1, -1)
-smplx_j3d = smplx_output.joints # (1, J, 3), joints in the world coordinate from the world mesh decoded by the optimizing parameters
-smplx_j3d = smplx_j3d - smplx_j3d[:, 0:1, :] + root_transl # !ALWAYS! Fuck the params['transl']
-
-# If you are applying rotation to the global orientation, you have to always compensate the rotation of the root joint translation
-"""
-
 import os
 import os.path as osp
 import numpy as np
@@ -740,7 +652,13 @@ def get_stage_optimizer(human_params, scene_params, residual_scene_scale, stage:
                     optim_target_dict[param_name].requires_grad = False
 
         optimizing_params = scene_params + human_params_to_optimize
-
+    # Print optimization parameters
+    print(f"Optimizing {len(optimizing_params)} parameters:")
+    print(f"- Human parameters ({len(human_params_names_to_optimize)}): {human_params_names_to_optimize}")
+    if stage == 2 or stage == 3:
+        print(f"- Scene parameters ({len(scene_params)})")
+    if stage == 1:
+        print(f"- Residual scene scale (1)")
     optimizer = torch.optim.Adam(optimizing_params, lr=lr, betas=(0.9, 0.9))
     return optimizer
 
@@ -803,7 +721,7 @@ def convert_human_params_to_numpy(human_params):
 
     return human_params_np
 
-def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/dust3r_ga_outputs_and_gt_cameras_random_sampled_views', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/dust3r_ga_outputs_and_gt_cameras_random_sampled_views', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_dir, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
@@ -813,6 +731,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
     stage2_start_idx_percentage = 0.2
     stage3_start_idx_percentage = 0.85
     niter = 300
+    niter_factor = 10 # niter = int(niter_factor * scene_scale)
     lr = 0.01
     dist_tol = 0.3
     scale_increasing_factor = 1.3
@@ -870,6 +789,12 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
     print(f"Running global alignment for {total_scene_num} scenes")
     for i in tqdm.tqdm(range(total_scene_num), total=total_scene_num):
         sample = dataset.get_single_item(i)
+        
+        sequence, frame = sample['sequence'], sample['frame']
+        print(f"Processing {sequence}_{frame}...")
+        # TEMP
+        # if frame != 200:
+        #     continue
 
         world_multiple_human_3d_annot = sample['world_multiple_human_3d_annot']
         world_gt_cameras = sample['multiview_cameras']
@@ -904,7 +829,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         dust3r_network_output = sample['dust3r_network_output']
 
         # load the precomputed 3D points, camera poses, and intrinsics from Dust3r GA output
-        dust3r_ga_output = sample['dust3r_ga_output']
+        dust3r_ga_output = copy.deepcopy(sample['dust3r_ga_output'])
         pts3d, im_focals, im_poses, cam_names = get_resume_info(dust3r_ga_output, device)
         assert sample_cam_names == cam_names, "Camera names do not match"
         
@@ -964,17 +889,20 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
                 multiview_multiperson_bboxes[human_name][cam_name] = torch.from_numpy(bbox).to(device)
 
         print("Initializing human parameters to optimize")
-        human_params_to_optimize = []
-        human_params_names_to_optimize = []
-
         human_params, human_inited_cam_poses, first_cam_human_vertices = \
             init_human_params(smplx_layer_dict[1], multiview_multiple_human_cam_pred, multiview_multiperson_poses2d, init_focal_length, init_princpt, device, get_vertices=vis) # dict of human parameters
-        for human_name, optim_target_dict in human_params.items():
-            for param_name in optim_target_dict.keys():
-                if optim_target_dict[param_name].requires_grad:
-                    human_params_to_optimize.append(optim_target_dict[param_name])
-                    human_params_names_to_optimize.append(f'{human_name}_{param_name}')
-        print(f"Optimizing {len(human_params_names_to_optimize)} parameters of humans: {human_params_names_to_optimize}")
+        init_human_cam_data = {
+            'human_params': copy.deepcopy(human_params),
+            'human_inited_cam_poses': copy.deepcopy(human_inited_cam_poses),
+        }
+        # human_params_to_optimize = []
+        # human_params_names_to_optimize = []
+        # for human_name, optim_target_dict in human_params.items():
+        #     for param_name in optim_target_dict.keys():
+        #         if optim_target_dict[param_name].requires_grad:
+        #             human_params_to_optimize.append(optim_target_dict[param_name])
+        #             human_params_names_to_optimize.append(f'{human_name}_{param_name}')
+        # print(f"Optimizing {len(human_params_names_to_optimize)} parameters of humans: {human_params_names_to_optimize}")
 
         """ Initialize the scene parameters """
         # Initialize the scale factor between the dust3r cameras and the human_inited_cam_poses
@@ -1005,8 +933,8 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
 
         print(f"Dust3r to Human scale ratio: {scene_scale}")
         # TEMP
-        niter = int(8 * scene_scale)
-        print(f"Set the number of iterations to {niter}; 8 * {scene_scale}")
+        niter = int(niter_factor * scene_scale)
+        print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
         scene_scale = scene_scale * scale_increasing_factor
         print(f"Scaled Dust3r to Human scale ratio: {scene_scale}")
 
@@ -1107,7 +1035,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
                             init_cam_center_dist_totalpairs_dist.append(dist)
                     init_cam_center_dist_total = torch.stack(init_cam_center_dist_totalpairs_dist)
                     
-                    if vis:
+                    if False and vis:
                         # Visualize the initilization of 3D human and 3D world
                         world_env = parse_to_save_data(scene, cam_names)
                         show_optimization_results(world_env, human_params, smplx_layer_dict[1])
@@ -1118,7 +1046,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
                     optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 3, lr)
                     print("\n3rd stage optimization starts at ", bar.n)
 
-                    if vis:
+                    if False and vis:
                         # Visualize the initilization of 3D human and 3D world
                         world_env = parse_to_save_data(scene, cam_names)
                         show_optimization_results(world_env, human_params, smplx_layer_dict[1])
@@ -1208,48 +1136,140 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         # Save output
         output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"
         total_output = {}
-        # total_output['gt_cameras'] = sample['multiview_cameras']
-        total_output['world_gt_cameras'] = world_gt_cameras
-        total_output['world_multiple_human_3d_annot'] = world_multiple_human_3d_annot
-        total_output['dust3r_ga'] = parse_to_save_data(scene, cam_names)
-        # convert human_params to numpy arrays and save to new dictionary
-        # human_params_np = {}
-        # for human_name, optim_target_dict in human_params.items():
-        #     human_params_np[human_name] = {}
-        #     for param_name in optim_target_dict.keys():
-        #         human_params_np[human_name][param_name] = optim_target_dict[param_name].reshape(1, -1).detach().cpu().numpy()
-        # total_output['human_params'] = human_params_np
-        total_output['human_params'] = convert_human_params_to_numpy(human_params)
+        total_output['gt_world_cameras'] = world_gt_cameras
+        total_output['gt_world_humans_smpl_params'] = world_multiple_human_3d_annot
+        total_output['gt_world_structure'] = sample['world_colmap_pointcloud_xyz']
+        total_output['our_pred_world_cameras_and_structure'] = parse_to_save_data(scene, cam_names)
+        total_output['our_pred_humans_smplx_params'] = convert_human_params_to_numpy(human_params)
+        total_output['dust3r_pred_world_cameras_and_structure'] = sample['dust3r_ga_output']
+        total_output['hmr2_pred_humans_and_cameras'] = init_human_cam_data 
+    
         print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
         with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
-            pickle.dump(total_output, f)
-        # 
+            pickle.dump(total_output, f)    
         
-        if True or vis:
-            show_optimization_results(total_output['dust3r_ga'], human_params, smplx_layer_dict[1])
-            # smplx_vertices_dict = {}
-            # for human_name, optim_target_dict in human_params.items():
-            #     # extract data from the optim_target_dict
-            #     body_pose = optim_target_dict['body_pose'].reshape(1, -1)
-            #     betas = optim_target_dict['betas'].reshape(1, -1)
-            #     global_orient = optim_target_dict['global_orient'].reshape(1, -1)
-            #     left_hand_pose = optim_target_dict['left_hand_pose'].reshape(1, -1)
-            #     right_hand_pose = optim_target_dict['right_hand_pose'].reshape(1, -1)
-
-            #     # decode the smpl mesh and joints
-            #     smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose)
-
-            #     # Add root translation to the joints
-            #     root_transl = optim_target_dict['root_transl'].reshape(1, 1, -1)
-            #     smplx_vertices = smplx_output.vertices
-            #     smplx_j3d = smplx_output.joints # (1, J, 3), joints in the world coordinate from the world mesh decoded by the optimizing parameters
-            #     smplx_vertices = smplx_vertices - smplx_j3d[:, 0:1, :] + root_transl
-            #     smplx_j3d = smplx_j3d - smplx_j3d[:, 0:1, :] + root_transl # !ALWAYS! Fuck the params['transl']
-            #     smplx_vertices_dict[human_name] = smplx_vertices[0].detach().cpu().numpy()
-            # try:
-            #     show_env_human_in_viser(world_env=total_output['dust3r_ga'], world_scale_factor=1., smplx_vertices_dict=smplx_vertices_dict, smplx_faces=smplx_layer.faces)
-            # except:
-            #     import pdb; pdb.set_trace()
+        if vis:
+            show_optimization_results(total_output['our_pred_world_cameras_and_structure'], human_params, smplx_layer_dict[1])
 
 if __name__ == '__main__':
     tyro.cli(main)
+
+
+# Data structure for total_output:
+# total_output = {
+#     'gt_world_cameras': {  # Ground truth camera parameters in world coordinates
+#         'cam01': {
+#             'cam2world_R': np.ndarray,  # shape (3, 3), rotation matrix
+#             'cam2world_t': np.ndarray,  # shape (3,), translation vector
+#             'K': np.ndarray,  # shape (3, 3), intrinsic matrix
+#             'img_width': int,
+#             'img_height': int,
+#             'cam2world_4by4': np.ndarray  # shape (4, 4), homogeneous transformation matrix
+#         },
+#         'cam02': {...},
+#         'cam03': {...},
+#         'cam04': {...}
+#     },
+#     'gt_world_humans_smpl_params': {  # Ground truth 3D human parameters
+#         'human_name': {  # e.g. 'aria01'
+#             'body_pose': np.ndarray,  # SMPL body pose parameters
+#             'betas': np.ndarray,  # SMPL shape parameters
+#             'global_orient': np.ndarray,  # Global orientation
+#             'root_transl': np.ndarray,  # Root translation
+#             'transl': np.ndarray  # Translation
+#         },
+#         'human_name2': {...}
+#     },
+#     'gt_world_structure': np.ndarray,  # (N,3) Ground truth 3D structure from COLMAP; filtered
+#     'our_pred_world_cameras_and_structure': {  # Our optimized camera parameters and 3D structure
+#         'cam01': {
+#             'rgbimg': np.ndarray,  # shape (H, W, 3), RGB image
+#             'intrinsic': np.ndarray,  # shape (3, 3), camera intrinsic matrix
+#             'cam2world': np.ndarray,  # shape (4, 4), camera extrinsic matrix
+#             'pts3d': np.ndarray,  # shape (N, 3), 3D points
+#             'depths': np.ndarray,  # shape (H, W), depth map
+#             'msk': np.ndarray,  # shape (H, W), mask
+#             'conf': np.ndarray  # shape (N,), confidence scores
+#         },
+#         'cam02': {...},
+#         ...
+#     },
+#     'our_pred_humans_smplx_params': {  # Our optimized human parameters in SMPL-X format
+#         'human_name': {  # e.g. 'aria01'
+#             'body_pose': np.ndarray,  # shape (1, 63), SMPL-X body pose parameters
+#             'global_orient': np.ndarray,  # shape (1, 3), global orientation
+#             'betas': np.ndarray,  # shape (1, 10), SMPL-X shape parameters
+#             'left_hand_pose': np.ndarray,  # shape (1, 45), left hand pose parameters
+#             'right_hand_pose': np.ndarray,  # shape (1, 45), right hand pose parameters
+#             'root_transl': np.ndarray  # shape (1, 3), root translation
+#         },
+#         'human_name2': {...}
+#     },
+#     'dust3r_pred_world_cameras_and_structure': {  # DUSt3R's global alignment results
+#         'cam01': {
+#             'rgbimg': np.ndarray,  # shape (H, W, 3), RGB image
+#             'intrinsic': np.ndarray,  # shape (3, 3), camera intrinsic matrix
+#             'cam2world': np.ndarray,  # shape (4, 4), camera extrinsic matrix
+#             'pts3d': np.ndarray,  # shape (N, 3), 3D points
+#             'depths': np.ndarray,  # shape (H, W), depth map
+#             'msk': np.ndarray,  # shape (H, W), mask
+#             'conf': np.ndarray  # shape (N,), confidence scores
+#         },
+#         'cam02': {...},
+#         ...
+#     },
+#     'hmr2_pred_humans_and_cameras': {  # Initial HMR2 predictions
+#         'human_params': {  # Initial human parameters
+#             'human_name': {
+#                 'body_pose': nn.Parameter,  # SMPL-X body pose parameters
+#                 'global_orient': nn.Parameter,  # Global orientation
+#                 'betas': nn.Parameter,  # SMPL-X shape parameters
+#                 'left_hand_pose': nn.Parameter,  # Left hand pose parameters
+#                 'right_hand_pose': nn.Parameter,  # Right hand pose parameters
+#                 'root_transl': nn.Parameter  # Root translation
+#             },
+#             'human_name2': {...}
+#         },
+#         'human_inited_cam_poses': {  # Initial camera poses from HMR2
+#             'cam01': np.ndarray,  # shape (4, 4), camera pose matrix, the world frame
+#             'cam02': np.ndarray,
+#             ...
+#         }
+#     }
+# }
+
+"""
+>> How to decode GT SMPL parameters
+    body_pose = torch.from_numpy(human_params['body_pose']).reshape(1, -1).to(device).float()
+    global_orient = torch.from_numpy(human_params['global_orient']).reshape(1, -1).to(device).float()
+    betas = torch.from_numpy(human_params['betas']).reshape(1, -1).to(device).float()
+
+    smpl_output = smpl_layer(betas=betas,
+                            body_pose=body_pose,
+                            global_orient=global_orient,
+                            pose2rot=True,
+                        )
+    root_transl = human_params['root_transl'] # np.ndarray (1, 3)
+    vertices = smpl_output.vertices.detach().squeeze(0).cpu().numpy()
+    joints = smpl_output.joints.detach().squeeze(0).cpu().numpy()
+    vertices = vertices - joints[0:1:, ] + root_transl
+    world_human_vertices[human_name] = vertices
+
+>> How to decode HMR2Hamer SMPL-X parameters
+# extract data from the optim_target_dict
+body_pose = optim_target_dict['body_pose'].reshape(1, -1)
+betas = optim_target_dict['betas'].reshape(1, -1)
+global_orient = optim_target_dict['global_orient'].reshape(1, -1)
+left_hand_pose = optim_target_dict['left_hand_pose'].reshape(1, -1)
+right_hand_pose = optim_target_dict['right_hand_pose'].reshape(1, -1)
+
+# decode the smpl mesh and joints
+smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose)
+
+# Add root translation to the joints
+root_transl = optim_target_dict['root_transl'].reshape(1, 1, -1)
+smplx_j3d = smplx_output.joints # (1, J, 3), joints in the world coordinate from the world mesh decoded by the optimizing parameters
+smplx_j3d = smplx_j3d - smplx_j3d[:, 0:1, :] + root_transl # !ALWAYS! Fuck the params['transl']
+
+# If you are applying rotation to the global orientation, you have to always compensate the rotation of the root joint translation
+"""

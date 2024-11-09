@@ -11,10 +11,12 @@ import PIL
 from PIL import Image, ImageOps
 import tqdm
 import pickle
+import copy
 import random
 import collections
 from collections import defaultdict
 from pathlib import Path
+
 
 from dust3r.utils.image import load_images as dust3r_load_images
 from multihmr.utils import normalize_rgb, get_focalLength_from_fieldOfView
@@ -373,7 +375,7 @@ class EgoHumansDataset(Dataset):
         return self.get_single_item(idx)
     
     def get_single_item(self, idx):
-        sample = self.datalist[idx]
+        sample = copy.deepcopy(self.datalist[idx])
         seq = sample['sequence']
         frame = sample['frame']
 
@@ -386,12 +388,13 @@ class EgoHumansDataset(Dataset):
         # make camera parameters homogeneous and invert
         # world to first camera
         first_cam_Rt_inv_4by4 = np.linalg.inv(first_cam_Rt_4by4) # (4,4)
-        
+
         # Transform all cameras relative to first camera
         for cam in sorted(cameras.keys()):
             cam_Rt_4by4 = cameras[cam]['cam2world_4by4']
             new_cam_Rt_4by4 = first_cam_Rt_inv_4by4 @ cam_Rt_4by4
             cameras[cam]['cam2world_4by4'] = new_cam_Rt_4by4
+        
 
         """ load 3d world annot; GT parameters """
         if self.optimize_human: # GT paramaters for evaluation
@@ -475,32 +478,32 @@ class EgoHumansDataset(Dataset):
                             'bbox': get_bbox_from_keypoints(points_img)
                         }
 
-            # # Draw keypoints on images and save them
-            # for cam in multiview_multiple_human_3d_world_projceted_annot.keys():
-            #     # Load image
-            #     img_path = sample['annot_and_img_paths'][cam]['img_path']
-            #     img = cv2.imread(img_path)
-                
-            #     # Draw keypoints for each human
-            #     for human_name, keypoints in multiview_multiple_human_3d_world_projceted_annot[cam].items():
-            #         # Draw bounding box
-            #         bbox = keypoints['bbox']
-            #         x1, y1, x2, y2, conf = bbox
-            #         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                # # Draw keypoints on images and save them
+                # for cam in multiview_multiple_human_3d_world_projceted_annot.keys():
+                #     # Load image
+                #     img_path = sample['annot_and_img_paths'][cam]['img_path']
+                #     img = cv2.imread(img_path)
+                    
+                #     # Draw keypoints for each human
+                #     for human_name, keypoints in multiview_multiple_human_3d_world_projceted_annot[cam].items():
+                #         # Draw bounding box
+                #         bbox = keypoints['bbox']
+                #         x1, y1, x2, y2, conf = bbox
+                #         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
 
-            #         # Draw each keypoint as a circle
-            #         for kp_idx, kp in enumerate(keypoints['pose2d']):
-            #             x, y = int(kp[0]), int(kp[1])
-            #             if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:  # Only draw if within image bounds
-            #                 cv2.circle(img, (x, y), 3, (255,0,0), -1)
-            #                 cv2.putText(img, str(kp_idx), (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-                
-            #         # Save the annotated image
-            #         save_dir = os.path.join('./vis_keypoints')
-            #         os.makedirs(save_dir, exist_ok=True)
-            #         save_path = os.path.join(save_dir, f'{cam}_{human_name}.jpg')
-            #         cv2.imwrite(save_path, img)
-            # """
+                #         # Draw each keypoint as a circle
+                #         for kp_idx, kp in enumerate(keypoints['pose2d']):
+                #             x, y = int(kp[0]), int(kp[1])
+                #             if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:  # Only draw if within image bounds
+                #                 cv2.circle(img, (x, y), 3, (255,0,0), -1)
+                #                 cv2.putText(img, str(kp_idx), (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                    
+                #         # Save the annotated image
+                #         save_dir = os.path.join('./vis_keypoints')
+                #         os.makedirs(save_dir, exist_ok=True)
+                #         save_path = os.path.join(save_dir, f'{seq}_{frame:05d}_{cam}_{human_name}.jpg')
+                #         cv2.imwrite(save_path, img)
+         
         
         # filter camera names that exist in both self.camera_names and cameras
         # selected_cameras = sorted([cam for cam in cameras.keys() if cam in self.camera_names])
@@ -735,7 +738,7 @@ class EgoHumansDataset(Dataset):
                                                                                     mono_multiple_human_2d_cam_pred_pose, multiple_human_3d_world_projected_annot_pose2d,
                                                                                     multiple_human_3d_world_projected_human_names, \
                                                                                     self.egohumans_image_size_tuple, \
-                                                                                    # cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
+                                                                                    cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
                                                                                     ) 
 
                     mono_pred_output_dict = {mono_pred_human_names[i]: # ex) 'aria01'
@@ -746,29 +749,16 @@ class EgoHumansDataset(Dataset):
                                                 'params': {key: mono_multiple_human_3d_cam_pred[key][i] for key in mono_multiple_human_3d_cam_pred.keys()} # dictionary of human parameters
                                             } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
                     multiview_multiple_human_cam_pred[camera_name] = mono_pred_output_dict
-                    import pdb; pdb.set_trace()
-                    # # SAVE_DIR
-                    # # self.vitpose_hmr2_hamer_output_dir,
-                    # save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions')
-                    # mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
-                    # Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
-                    # mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
-                    # with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
-                    #     pickle.dump(mono_pred_output_dict, f)
-                    # print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
 
-        # """ get MultiHMR output; Predicted parameters """
-        # if self.dust3r_raw_output_dir is not None and self.dust3r_ga_output_dir is not None and self.multihmr_output_path is not None:
-        #     multihmr_output = self.multihmr_output[f'{seq}_{frame}_{"".join(selected_cameras)}']['first_cam_humans']
-
-        #     # assign the human names to the multihmr output
-        #     # Later, you can replace the multihmr_2d_pred with ViTPose 2D keypoints output
-        #     first_cam_human_names = list(multiview_multiple_human_2d_cam_annot[first_cam].keys())
-        #     multihmr_2d_pred = [human['j2d'].cpu().numpy() for human in multihmr_output]
-        #     egohumans_2d_annot = [multiview_multiple_human_2d_cam_annot[first_cam][human_name]['pose2d'] for human_name in first_cam_human_names]
-        #     multihmr_output_human_names = assign_human_names_to_multihmr_output(multihmr_first_cam_affine_matrix, multihmr_2d_pred, egohumans_2d_annot, first_cam_human_names, \
-        #                                                                         '')#sample['annot_and_img_paths'][first_cam]['img_path']) 
-        #     multihmr_output_dict = {multihmr_output_human_names[i]: multihmr_output[i] for i in range(len(multihmr_output))}
+                    # SAVE_
+                    # self.vitpose_hmr2_hamer_output_dir,
+                    save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8')
+                    mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
+                    Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
+                    mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
+                    with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
+                        pickle.dump(mono_pred_output_dict, f)
+                    print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
 
         # Load all required data
         # Data dictionary contains:
@@ -1297,8 +1287,8 @@ if __name__ == '__main__':
     
     # Combine lists of sequences
     # selected_big_seq_list = ['01_tagging', '02_lego', '03_fencing', '04_basketball', '05_volleyball', '06_badminton', '07_tennis']
-    selected_big_seq_list = ['07_tennis'] # ['5_volleyball', '04_basketball'] # ['01_tagging', '02_lego', '03_fencing']  #-> might stop because of scipy infinity bug
-    selected_small_seq_start_and_end_idx_tuple = (1, 1)
+    selected_big_seq_list = ['06_badminton'] #['07_tennis'] # ['04_basketball', '05_volleyball'] # ['01_tagging', '02_lego', '03_fencing']  #-> might stop because of scipy infinity bug
+    selected_small_seq_start_and_end_idx_tuple = (30, 34)
     num_of_cams = None
     data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
     vitpose_hmr2_hamer_output_dir = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready' 
