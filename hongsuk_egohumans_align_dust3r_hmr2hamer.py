@@ -33,45 +33,12 @@ from hongsuk_vis_viser_env_only import visualize_cameras, procrustes_align
 from hongsuk_vis_viser_env_human import visualize_cameras_and_human, show_env_human_in_viser
 
 from hongsuk_egohumans_dataloader import create_dataloader
-from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, ORIGINAL_SMPLX_JOINT_NAMES
+from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, ORIGINAL_SMPLX_JOINT_NAMES, COCO_MAIN_BODY_SKELETON
 
 coco_main_body_end_joint_idx = COCO_WHOLEBODY_KEYPOINTS.index('right_heel') 
 coco_main_body_joint_idx = list(range(coco_main_body_end_joint_idx + 1))
 coco_main_body_joint_names = COCO_WHOLEBODY_KEYPOINTS[:coco_main_body_end_joint_idx + 1]
 smplx_main_body_joint_idx = [ORIGINAL_SMPLX_JOINT_NAMES.index(joint_name) for joint_name in coco_main_body_joint_names] 
-
-# Define skeleton edges using indices of main body joints
-COCO_MAIN_BODY_SKELETON = [
-    # Torso
-    [5, 6],   # left_shoulder to right_shoulder
-    [5, 11],  # left_shoulder to left_hip
-    [6, 12],  # right_shoulder to right_hip
-    [11, 12], # left_hip to right_hip
-    
-    # Left arm
-    [5, 7],   # left_shoulder to left_elbow
-    [7, 9],   # left_elbow to left_wrist
-    
-    # Right arm
-    [6, 8],   # right_shoulder to right_elbow
-    [8, 10],  # right_elbow to right_wrist
-    
-    # Left leg
-    [11, 13], # left_hip to left_knee
-    [13, 15], # left_knee to left_ankle
-    [15, 19], # left_ankle to left_heel
-    
-    # Right leg
-    [12, 14], # right_hip to right_knee
-    [14, 16], # right_knee to right_ankle
-    [16, 22], # right_ankle to right_heel
-
-    # Head
-    [0, 1], # nose to left_eye
-    [0, 2], # nose to right_eye
-    [1, 3], # left_eye to left_ear
-    [2, 4], # right_eye to right_ear
-]
 
 
 def draw_2d_keypoints(img, keypoints, keypoints_name=None, color=(0, 255, 0), radius=1):
@@ -170,89 +137,6 @@ def project_points(world2cam_4by4, intrinsics, points, device='cuda'):
     points_img = points_img[:, :2, :] / points_img[:, 2:3, :] # (N, 2, J)
     points_img = points_img.permute(0, 2, 1) # (N, J, 2)
     return points_img
-
-def get_prev_human_loss(smplx_layer, humans_optim_target_dict, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, shape_prior_weight=0, device='cuda'):
-    # multiview_multiperson_poses2d: Dict[human_name -> Dict[cam_name -> (J, 3)]]
-    # multiview_multiperson_bboxes: Dict[human_name -> Dict[cam_name -> (5)]]
-    # multiview_world2cam_4by4: (N, 4, 4), multiview_intrinsics: (N, 3, 3)
-    # num_cams can be different from the number of cameras (N) in the scene because some humans might not be detected in some cameras
-
-    # save the 2D joints for visualization
-    projected_joints = defaultdict(dict) # Dict[cam_name -> Dict[human_name -> (J, 3)]]
-
-    # define different loss per view; factors are the inverse of the area of the bbox and the human detection score
-    human_loss = 0
-    for human_name, optim_target_dict in humans_optim_target_dict.items():
-        # get the 2D joints in the image plane and the loss weights per joint
-        multiview_poses2d = multiview_multiperson_poses2d[human_name] # Dict[cam_name -> (J, 3)]
-        multiview_bboxes = multiview_multiperson_bboxes[human_name] # Dict[cam_name -> (5)]
-
-        # extract data from the optim_target_dict
-        body_pose = optim_target_dict['body_pose'].reshape(1, -1)
-        betas = optim_target_dict['betas'].reshape(1, -1)
-        global_orient = optim_target_dict['global_orient'].reshape(1, -1)
-        left_hand_pose = optim_target_dict['left_hand_pose'].reshape(1, -1)
-        right_hand_pose = optim_target_dict['right_hand_pose'].reshape(1, -1)
-
-        # decode the smpl mesh and joints
-        smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose)
-
-        # Add root translation to the joints
-        root_transl = optim_target_dict['root_transl'].reshape(1, 1, -1)
-        smplx_j3d = smplx_output.joints # (1, J, 3), joints in the world coordinate from the world mesh decoded by the optimizing parameters
-        smplx_j3d = smplx_j3d - smplx_j3d[:, 0:1, :] + root_transl # !ALWAYS! Fuck the params['transl']
-
-        # get the joint loss weight factors
-        multiview_poses2d_refactored = []
-        multiview_loss_weights = []
-        multiview_bbox_areas = 0
-        sampled_cam_indices = []
-        for cam_name, bbox in multiview_bboxes.items():
-            bbox_area = bbox[2] * bbox[3]
-            det_score = bbox[4]
-            multiview_loss_weights.append(det_score / bbox_area)
-            multiview_bbox_areas += bbox_area
-            sampled_cam_indices.append(cam_names.index(cam_name))
-            multiview_poses2d_refactored.append(multiview_multiperson_poses2d[human_name][cam_name])
-        multiview_loss_weights = torch.stack(multiview_loss_weights).float() # * multiview_bbox_areas   # (num_cams,)
-        multiview_poses2d = torch.stack(multiview_poses2d_refactored).float() # (num_cams, J, 3)
-
-        # project the joints to different views
-        multiview_smplx_j2d = project_points(multiview_world2cam_4by4[sampled_cam_indices], multiview_intrinsics[sampled_cam_indices], smplx_j3d, device=device) # (num_cams, J, 2)
-
-        # map the multihmr 2d pred to the COCO_WHOLEBODY_KEYPOINTS
-        multiview_smplx_j2d_coco_ordered = torch.zeros(len(multiview_smplx_j2d), len(COCO_WHOLEBODY_KEYPOINTS), 3, device=device, dtype=torch.float32)
-        for i, joint_name in enumerate(COCO_WHOLEBODY_KEYPOINTS):
-            if joint_name in ORIGINAL_SMPLX_JOINT_NAMES:
-                multiview_smplx_j2d_coco_ordered[:, i, :2] = multiview_smplx_j2d[:, ORIGINAL_SMPLX_JOINT_NAMES.index(joint_name), :2]
-                multiview_smplx_j2d_coco_ordered[:, i, 2] = 1 # for validity check. 1 if the joint is valid, 0 otherwise
-
-        multiview_smplx_j2d_coco_ordered[:, :COCO_WHOLEBODY_KEYPOINTS.index('right_heel')+1, 2] *= 100 # main body joints are weighted 10 times more
-        # multiview_multihmr_j2d_transformed[:, COCO_WHOLEBODY_KEYPOINTS.index('right_heel')+1:, 2] = 0 # ignore non-main body joints
-
-        # compute the hubor loss using Pytorch between multiview_multihmr_j2d_transformed and multiview_poses2d
-        # one_human_loss = multiview_loss_weights[:, None, None].repeat(1, multiview_smplx_j2d_coco_ordered.shape[1], 1) \
-        # * multiview_smplx_j2d_coco_ordered[:, :, 2:] * multiview_poses2d[:, :, 2:] \
-        # * F.smooth_l1_loss(multiview_smplx_j2d_coco_ordered[:, :, :2], multiview_poses2d[:, :, :2], reduction='none').mean(dim=-1, keepdim=True)
-
-        # TEMP; just use main keypoints
-        multiview_smplx_j2d_coco_ordered = multiview_smplx_j2d_coco_ordered[:, coco_main_body_joint_idx, :]
-        multiview_poses2d = multiview_poses2d[:, coco_main_body_joint_idx, :]
-        # Compute the l2 
-        one_human_loss = multiview_loss_weights[:, None, None].repeat(1, multiview_smplx_j2d_coco_ordered.shape[1], 1) \
-        * multiview_smplx_j2d_coco_ordered[:, :, 2:] * multiview_poses2d[:, :, 2:] \
-        * F.mse_loss(multiview_smplx_j2d_coco_ordered[:, :, :2], multiview_poses2d[:, :, :2], reduction='none').mean(dim=-1, keepdim=True)
-
-        human_loss += one_human_loss.mean()
-        if shape_prior_weight > 0:
-            # L2 loss to regularize the shape vector
-            human_loss += shape_prior_weight * F.mse_loss(betas, torch.zeros_like(betas))
-
-        # for visualization purpose
-        for idx, sam_cam_idx in enumerate(sampled_cam_indices):
-            projected_joints[cam_names[sam_cam_idx]][human_name] = multiview_smplx_j2d_coco_ordered[idx]
-
-    return human_loss, projected_joints
 
 
 def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_optim_target_dict, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, shape_prior_weight=0, device='cuda'):

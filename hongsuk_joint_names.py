@@ -470,3 +470,37 @@ ORIGINAL_SMPLX_JOINT_NAMES = [
     "left_contour_2",
     "left_contour_1",
 ]
+
+
+# Define skeleton edges using indices of main body joints
+COCO_MAIN_BODY_SKELETON = [
+    # Torso
+    [5, 6],   # left_shoulder to right_shoulder
+    [5, 11],  # left_shoulder to left_hip
+    [6, 12],  # right_shoulder to right_hip
+    [11, 12], # left_hip to right_hip
+    
+    # Left arm
+    [5, 7],   # left_shoulder to left_elbow
+    [7, 9],   # left_elbow to left_wrist
+    
+    # Right arm
+    [6, 8],   # right_shoulder to right_elbow
+    [8, 10],  # right_elbow to right_wrist
+    
+    # Left leg
+    [11, 13], # left_hip to left_knee
+    [13, 15], # left_knee to left_ankle
+    [15, 19], # left_ankle to left_heel
+    
+    # Right leg
+    [12, 14], # right_hip to right_knee
+    [14, 16], # right_knee to right_ankle
+    [16, 22], # right_ankle to right_heel
+
+    # Head
+    [0, 1], # nose to left_eye
+    [0, 2], # nose to right_eye
+    [1, 3], # left_eye to left_ear
+    [2, 4], # right_eye to right_ear
+]

@@ -14,7 +14,7 @@ from dust3r.cloud_opt.base_opt import BasePCOptimizer
 from dust3r.utils.geometry import xy_grid, geotrf, inv
 from dust3r.utils.device import to_cpu, to_numpy
 
-from dust3r.cloud_opt.init_im_poses import init_minimum_spanning_tree, rigid_points_registration, fast_pnp
+from dust3r.cloud_opt.init_im_poses import init_minimum_spanning_tree, rigid_points_registration, fast_pnp, align_multiple_poses
 from dust3r.cloud_opt.commons import edge_str, i_j_ij, compute_edge_scores
 
 class PointCloudOptimizer(BasePCOptimizer):
@@ -332,17 +332,19 @@ class PointCloudOptimizer(BasePCOptimizer):
     # Hongsuk added
     def init_from_known_params_hongsuk(self, im_focals=None, im_poses=None, pts3d=None, niter_PnP=10, min_conf_thr=3):
         # set the D, P, K parameters from the known parameters (depthmaps, extrinsics, intrinsics)
-        for i in range(self.n_imgs):
-            cam2world = im_poses[i]
-            depth = geotrf(inv(cam2world), pts3d[i])[..., 2]
-            self._set_depthmap(i, depth)
 
-            self._set_pose(self.im_poses, i, im_poses[i])
-            if im_focals[i] is not None:
-                self._set_focal(i, im_focals[i])
         
         # set the pw poses
         if pts3d is not None:
+            for i in range(self.n_imgs):
+                cam2world = im_poses[i]
+                depth = geotrf(inv(cam2world), pts3d[i])[..., 2]
+                self._set_depthmap(i, depth)
+
+                self._set_pose(self.im_poses, i, im_poses[i])
+                if im_focals[i] is not None:
+                    self._set_focal(i, im_focals[i])
+
             # set the pairwise poses from the known 3D points
             # this looks more accurate than doing it from the camera poses and intrinsics
             for e, (i, j) in enumerate(self.edges):
@@ -352,23 +354,52 @@ class PointCloudOptimizer(BasePCOptimizer):
                 self._set_pose(self.pw_poses, e, R, T, scale=s)
                 # print(e, self.pw_poses[e])
         else:
+            # indices of known poses
+            # nkp, _, known_poses = get_known_poses(self)
+            # assert nkp == self.n_imgs, 'not all poses are known'
+
+            # # get all focals
+            # nkf, _, im_focals = get_known_focals(self)
+            # # assert nkf == self.n_imgs
+
+            for i in range(self.n_imgs):
+                self._set_pose(self.im_poses, i, im_poses[i])
+                if im_focals[i] is not None:
+                    self._set_focal(i, im_focals[i])
+
+            im_pp = self.get_principal_points()
+
+            best_depthmaps = {}
             # set the pairwise poses from the known camera poses and intrinsics 
-            for e, (i, j) in enumerate(tqdm(self.edges, disable=not self.verbose)):
+            for e, (i, j) in enumerate(self.edges):
                 i_j = edge_str(i, j)
 
                 # find relative pose for this pair
-                P1 = torch.eye(4, device=device)
+                P1 = torch.eye(4, device=self.device)
                 msk = self.conf_i[i_j] > min(min_conf_thr, self.conf_i[i_j].min() - 0.1)
                 _, P2 = fast_pnp(self.pred_j[i_j], float(im_focals[i].mean()),
-                                pp=im_pp[i], msk=msk, device=device, niter_PnP=niter_PnP)
+                                pp=im_pp[i], msk=msk, device=self.device, niter_PnP=niter_PnP)
 
                 # align the two predicted camera with the two gt cameras
-                s, R, T = align_multiple_poses(torch.stack((P1, P2)), known_poses[[i, j]])
+                s, R, T = align_multiple_poses(torch.stack((P1, P2)), im_poses[[i, j]])
                 # normally we have known_poses[i] ~= sRT_to_4x4(s,R,T,device) @ P1
                 # and geotrf(sRT_to_4x4(1,R,T,device), s*P2[:3,3])
                 self._set_pose(self.pw_poses, e, R, T, scale=s)
        
-        print(' init loss =', float(self()[0]))
+                # remember if this is a good depthmap
+                score = float(self.conf_i[i_j].mean())
+                if score > best_depthmaps.get(i, (0,))[0]:
+                    best_depthmaps[i] = score, i_j, s
+
+            # init all image poses
+            for n in range(self.n_imgs):
+                # assert known_poses_msk[n]
+                _, i_j, scale = best_depthmaps[n]
+                depth = self.pred_i[i_j][:, :, 2]
+                self._set_depthmap(n, depth * scale)
+        init_loss = float(self()[0])
+        print(' init loss =', init_loss)
+        return init_loss
 
     def init_default_mst(self, niter_PnP=10, min_conf_thr=3):
         init_minimum_spanning_tree(self, niter_PnP=niter_PnP)
