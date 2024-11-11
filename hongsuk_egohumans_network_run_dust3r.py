@@ -46,9 +46,6 @@ def main(output_dir: str = './outputs/egohumans/', egohumans_data_root: str = '.
 
     total_output = {}
     for i, sample in tqdm.tqdm(enumerate(dataloader), total=len(dataloader)):
-        # TEMP
-        if i < 510:
-            continue
         cam_names = sorted(sample['multiview_images'].keys())
 
         imgs = [sample['multiview_images'][cam_name] for cam_name in cam_names]

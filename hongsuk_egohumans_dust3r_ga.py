@@ -1,36 +1,32 @@
 """
-Total Output Data Structure:
-
-total_output = {
-    'sequence_frame_cam01cam02cam03cam04': {  # e.g. '001_tagging_0_cam01cam02cam03cam04'
-        'gt_cameras': {
-            'cam01': {
-                'cam2world_4by4': np.ndarray,  # shape (4, 4), camera extrinsic matrix
-                'K': np.ndarray,  # shape (3, 3), intrinsic matrix
-                'img_width': int,
-                'img_height': int
-            },
-            'cam02': {...},
-            'cam03': {...},
-            'cam04': {...}
+GA output Data Structure:
+{ 
+    'gt_cameras': {
+        'cam01': {
+            'cam2world_4by4': np.ndarray,  # shape (4, 4), camera extrinsic matrix
+            'K': np.ndarray,  # shape (3, 3), intrinsic matrix
+            'img_width': int,
+            'img_height': int
         },
-        'dust3r_ga': {  # Global alignment results
-            'cam01': {
-                'rgbimg': np.ndarray,  # shape (H, W, 3), RGB image
-                'intrinsic': np.ndarray,  # shape (3, 3), camera intrinsic matrix
-                'cam2world': np.ndarray,  # shape (4, 4), camera extrinsic matrix
-                'pts3d': np.ndarray,  # shape (N, 3), 3D points
-                'depths': np.ndarray,  # shape (H, W), depth map
-                'msk': np.ndarray,  # shape (H, W), mask
-                'conf': np.ndarray,  # shape (N,), confidence scores
-            },
-            'cam02': {...},
-            'cam03': {...},
-            'cam04': {...}
-        }
+        'cam02': {...},
+        'cam03': {...},
+        'cam04': {...}
     },
-    'sequence_frame_cam01cam02cam03cam04': {...},
-    ...
+    'dust3r_ga': {  # Global alignment results
+        'cam01': {
+            'rgbimg': np.ndarray,  # shape (H, W, 3), RGB image
+            'intrinsic': np.ndarray,  # shape (3, 3), camera intrinsic matrix
+            'cam2world': np.ndarray,  # shape (4, 4), camera extrinsic matrix
+            'pts3d': np.ndarray,  # shape (N, 3), 3D points
+            'depths': np.ndarray,  # shape (H, W), depth map
+            'msk': np.ndarray,  # shape (H, W), mask
+            'conf': np.ndarray,  # shape (N,), confidence scores
+        },
+        'cam02': {...},
+        'cam03': {...},
+        'cam04': {...}
+    },
+    'img_names': (sequence, frame, cam_names)
 }
 """
 
@@ -114,14 +110,15 @@ def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = 
 
     # EgoHumans data
     # Fix batch size to 1 for now
-    selected_big_seq_list = [] #['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
+    selected_big_seq_list = ['02_lego'] #['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    num_of_cams = 10 #4
+    num_of_cams = 2
+    use_sam2_mask = False
     subsample_rate = 100
     output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', 'dust3r_ga_outputs_and_gt_cameras_random_sampled_views', f'num_of_cams{num_of_cams}')
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
-    dataset, dataloader = create_dataloader(egohumans_data_root, dust3r_raw_output_dir=dust3r_raw_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list)
+    dataset, dataloader = create_dataloader(egohumans_data_root, dust3r_raw_output_dir=dust3r_raw_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, use_sam2_mask=use_sam2_mask, selected_big_seq_list=selected_big_seq_list)
 
     # Dust3r Config for the global alignment
     mode = GlobalAlignerMode.PointCloudOptimizer if num_of_cams > 2 else GlobalAlignerMode.PairViewer
@@ -167,7 +164,7 @@ def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = 
 
                     bar.set_postfix_str(f'{lr=:g} loss={loss:g}')
                     bar.update()
-            print("final loss: ", loss)
+            print("final loss: ", loss.item())
 
         # Save output
         output_name = f"{sample['sequence']}_{sample['frame']}"
@@ -176,18 +173,19 @@ def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = 
         to_save_data['dust3r_ga'] = parse_to_save_data(scene, cam_names, 0)
         to_save_data['img_names'] = (sample['sequence'], sample['frame'], cam_names)
 
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f'{output_name}.pkl')
-        print(f'Saving output to {output_path}')
-        with open(output_path, 'wb') as f:
-            pickle.dump(to_save_data, f)
+        # os.makedirs(output_dir, exist_ok=True)
+        # output_path = os.path.join(output_dir, f'{output_name}.pkl')
+        # print(f'Saving output to {output_path}')
+        # with open(output_path, 'wb') as f:
+        #     pickle.dump(to_save_data, f)
 
         # visualize
         if vis:
             try:
                 show_env_in_viser(world_env=to_save_data['dust3r_ga'], world_scale_factor=10., gt_cameras=to_save_data['gt_cameras'])
             except:
-                pass
+                import pdb; pdb.set_trace()
+
 
 if __name__ == '__main__':
     tyro.cli(main)

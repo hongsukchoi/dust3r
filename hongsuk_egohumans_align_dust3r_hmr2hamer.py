@@ -255,7 +255,7 @@ def get_prev_human_loss(smplx_layer, humans_optim_target_dict, cam_names, multiv
     return human_loss, projected_joints
 
 
-def get_human_loss(smplx_layer_dict, humans_optim_target_dict, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, shape_prior_weight=0, device='cuda'):
+def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_optim_target_dict, cam_names, multiview_world2cam_4by4, multiview_intrinsics, multiview_multiperson_poses2d, multiview_multiperson_bboxes, shape_prior_weight=0, device='cuda'):
     # multiview_multiperson_poses2d: Dict[human_name -> Dict[cam_name -> (J, 3)]]
     # multiview_multiperson_bboxes: Dict[human_name -> Dict[cam_name -> (5)]]
     # multiview_world2cam_4by4: (N, 4, 4), multiview_intrinsics: (N, 3, 3)
@@ -264,7 +264,7 @@ def get_human_loss(smplx_layer_dict, humans_optim_target_dict, cam_names, multiv
     projected_joints = defaultdict(dict)
 
     # Collect all human parameters into batched tensors
-    human_names = list(humans_optim_target_dict.keys())
+    human_names = sorted(list(humans_optim_target_dict.keys()))
     batch_size = len(human_names)
 
     # # define the smplx layer
@@ -354,10 +354,13 @@ def get_human_loss(smplx_layer_dict, humans_optim_target_dict, cam_names, multiv
         # Store projected joints for visualization
         for idx, cam_idx in enumerate(cam_indices):
             projected_joints[cam_names[cam_idx]][human_name] = human_proj_joints_coco[idx]
+        
+        if human_idx >= num_of_humans_for_optimization:
+            break
 
     # Add shape prior if requested
     if shape_prior_weight > 0:
-        total_loss += shape_prior_weight * F.mse_loss(betas, torch.zeros_like(betas))
+        total_loss += shape_prior_weight * F.mse_loss(betas[:num_of_humans_for_optimization], torch.zeros_like(betas[:num_of_humans_for_optimization]))
 
     return total_loss, projected_joints
 
@@ -426,11 +429,11 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
     # Decode the smplx mesh and get the 3D bone lengths / compare them with the bone lengths from the vitpose 2D bone lengths
     camera_names = sorted(list(multiview_multiple_human_cam_pred.keys()))
     first_cam = camera_names[0]
-    first_cam_human_name_counts = {human_name: 0 for human_name in multiview_multiple_human_cam_pred[first_cam].keys()}
+    first_cam_human_name_counts = {human_name: {'count': 0, 'pose2d_conf': 0} for human_name in sorted(list(multiview_multiple_human_cam_pred[first_cam].keys()))}
     missing_human_names_in_first_cam = defaultdict(list)
     multiview_multiperson_init_trans = defaultdict(dict) # Dict[human_name -> Dict[cam_name -> (3)]]
     for cam_name in camera_names:
-        for human_name in multiview_multiple_human_cam_pred[cam_name].keys():
+        for human_name in sorted(list(multiview_multiple_human_cam_pred[cam_name].keys())):
             params = multiview_multiple_human_cam_pred[cam_name][human_name]['params']
             body_pose = params['body_pose'].reshape(1, -1).to(device)
             global_orient = params['global_orient'].reshape(1, -1).to(device)
@@ -451,25 +454,41 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
             init_trans = estimate_initial_trans(smplx_coco_main_body_joints, vitpose_2d_keypoints, focal_length, princpt, COCO_MAIN_BODY_SKELETON)
             # How to use init_trans?
             # vertices = vertices - joints[0:1] + init_trans # !ALWAYS! Fuck the params['transl']
-            if human_name in first_cam_human_name_counts.keys():
-                first_cam_human_name_counts[human_name] += 1
+            if human_name in sorted(list(first_cam_human_name_counts.keys())):
+                first_cam_human_name_counts[human_name]['count'] += 1
+                first_cam_human_name_counts[human_name]['pose2d_conf'] = sum(vitpose_2d_keypoints[:, 2])
             else:
                 missing_human_names_in_first_cam[human_name].append(cam_name)
             multiview_multiperson_init_trans[human_name][cam_name] = init_trans
 
     # main human is the one that is detected in the first camera and has the most detections across all cameras
-    main_human_name = None
+    main_human_name_candidates = []
     max_count = 0
-    for human_name, count in first_cam_human_name_counts.items():
-        if count == len(camera_names):
-            main_human_name = human_name
+    for human_name, count_dict in first_cam_human_name_counts.items():
+        if count_dict['count'] == len(camera_names):
+            main_human_name_candidates.append(human_name)
             max_count = len(camera_names)
-            break
-        elif count > max_count:
-            max_count = count
-            main_human_name = human_name
+        elif count_dict['count'] > max_count:
+            max_count = count_dict['count']
+            main_human_name_candidates.append(human_name)
+    
     if max_count != len(camera_names):
-        print(f"Warning: {main_human_name} is the most detected main human but not detected in all cameras")
+        print(f"Warning: {main_human_name_candidates} are the most detected main human but not detected in all cameras")
+
+    # First filter to only keep humans with the maximum count
+    max_count_humans = []
+    for human_name in main_human_name_candidates:
+        if first_cam_human_name_counts[human_name]['count'] == max_count:
+            max_count_humans.append(human_name)
+    
+    # Among those with max count, pick the one with highest confidence
+    main_human_name = None
+    max_conf = 0
+    for human_name in max_count_humans:
+        conf = first_cam_human_name_counts[human_name]['pose2d_conf']
+        if conf > max_conf:
+            max_conf = conf
+            main_human_name = human_name
     
     # Initialize Stage 2: Get the initial camera poses with respect to the first camera
     global_orient_first_cam = multiview_multiple_human_cam_pred[first_cam][main_human_name]['params']['global_orient'][0].cpu().numpy()
@@ -482,7 +501,7 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
 
     # Calculate other camera poses relative to world (first camera)
     cam_poses = {first_cam: world_T_first}  # Store all camera poses
-    for cam_name in multiview_multiperson_init_trans[main_human_name].keys():
+    for cam_name in sorted(list(multiview_multiperson_init_trans[main_human_name].keys())):
         if cam_name == first_cam:
             continue
         
@@ -519,7 +538,7 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
     # Organize the data for optimization
     # Get the first cam human parameters with the initial translation
     first_cam_human_params = {}
-    for human_name in multiview_multiple_human_cam_pred[first_cam].keys():
+    for human_name in sorted(list(multiview_multiple_human_cam_pred[first_cam].keys())):
         first_cam_human_params[human_name] = multiview_multiple_human_cam_pred[first_cam][human_name]['params']
         first_cam_human_params[human_name]['root_transl'] = torch.from_numpy(multiview_multiperson_init_trans[human_name][first_cam]).reshape(1, -1).to(device)
 
@@ -528,7 +547,7 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
     for missing_human_name in missing_human_names_in_first_cam:
         missing_human_exist_cam_idx = 0
         other_cam_name = missing_human_names_in_first_cam[missing_human_name][missing_human_exist_cam_idx]
-        while other_cam_name not in cam_poses.keys():
+        while other_cam_name not in sorted(list(cam_poses.keys())):
             missing_human_exist_cam_idx += 1
             if missing_human_exist_cam_idx == len(missing_human_names_in_first_cam[missing_human_name]):
                 print(f"Warning: {missing_human_name} cannot be handled because it can't transform to the first camera coordinate frame")
@@ -610,7 +629,7 @@ def get_stage_optimizer(human_params, scene_params, residual_scene_scale, stage:
         human_params_to_optimize = []
         human_params_names_to_optimize = []
         for human_name, optim_target_dict in human_params.items():
-            for param_name in optim_target_dict.keys():
+            for param_name in sorted(list(optim_target_dict.keys())):
                 if param_name in optimizing_param_names:
                     optim_target_dict[param_name].requires_grad = True    
                     human_params_to_optimize.append(optim_target_dict[param_name])
@@ -626,7 +645,7 @@ def get_stage_optimizer(human_params, scene_params, residual_scene_scale, stage:
         human_params_to_optimize = []
         human_params_names_to_optimize = []
         for human_name, optim_target_dict in human_params.items():
-            for param_name in optim_target_dict.keys():
+            for param_name in sorted(list(optim_target_dict.keys())):
                 if param_name in optimizing_human_param_names:
                     optim_target_dict[param_name].requires_grad = True
                     human_params_to_optimize.append(optim_target_dict[param_name])
@@ -643,7 +662,7 @@ def get_stage_optimizer(human_params, scene_params, residual_scene_scale, stage:
         human_params_to_optimize = []
         human_params_names_to_optimize = []
         for human_name, optim_target_dict in human_params.items():
-            for param_name in optim_target_dict.keys():
+            for param_name in sorted(list(optim_target_dict.keys())):
                 if param_name in optimizing_human_param_names:
                     optim_target_dict[param_name].requires_grad = True
                     human_params_to_optimize.append(optim_target_dict[param_name])
@@ -728,14 +747,16 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
 
     # Parameters I am tuning
     human_loss_weight = 5.0
-    stage2_start_idx_percentage = 0.2
-    stage3_start_idx_percentage = 0.85
+    # TEMP
+    stage2_start_idx_percentage = 0.5 #0.2
+    stage3_start_idx_percentage = 0.85 
+    min_niter = 500
     niter = 300
-    niter_factor = 10 # niter = int(niter_factor * scene_scale)
-    lr = 0.01
+    niter_factor = 20 ##10 # niter = int(niter_factor * scene_scale)
+    lr = 0.015
     dist_tol = 0.3
-    scale_increasing_factor = 1.3
-    # # TEMP
+    scale_increasing_factor = 2 #1.3
+    num_of_humans_for_optimization = None
     # identified_vitpose_hmr2_hamer_output_dir = None
 
     # EgoHumans data
@@ -744,16 +765,20 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
     selected_small_seq_start_and_end_idx_tuple = None if len(sel_small_seq_range) == 0 else sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
     # num_of_cams = 3
-    num_of_cams = 4
+    num_of_cams = 10 # 2
     subsample_rate = 100 
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
     dust3r_ga_output_dir = osp.join(dust3r_ga_output_dir, f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, 'optim_outputs', 'optim_outputs_trial1', f'num_of_cams{num_of_cams}')
+    # TEMP
+    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'ablation_num_of_humans{num_of_humans_for_optimization}', f'num_of_cams{num_of_cams}')
+    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'ablation_num_of_cams',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
+
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
     dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, identified_vitpose_hmr2_hamer_output_dir=identified_vitpose_hmr2_hamer_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
 
     # Dust3r Config for the global alignment
-    mode = GlobalAlignerMode.PointCloudOptimizer if num_of_cams > 2 else GlobalAlignerMode.PairViewer
+    mode = GlobalAlignerMode.PointCloudOptimizer #if num_of_cams > 2 else GlobalAlignerMode.PairViewer
     device = 'cuda'
     silent = False
     schedule = 'linear'
@@ -792,10 +817,6 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         
         sequence, frame = sample['sequence'], sample['frame']
         print(f"Processing {sequence}_{frame}...")
-        # TEMP
-        # if frame != 200:
-        #     continue
-
         world_multiple_human_3d_annot = sample['world_multiple_human_3d_annot']
         world_gt_cameras = sample['multiview_cameras']
 
@@ -814,7 +835,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
 
         # TEMPORARY Sanity check; due to the reid issue because of the noisy 2D groundtruth annotation, some views don't have any human detections, which doesn't make sense
         # Skip those samples
-        sample_cam_names = list(sample['multiview_multiple_human_cam_pred'].keys())
+        sample_cam_names = sorted(list(sample['multiview_multiple_human_cam_pred'].keys()))
         sanity_check_skip = False
         for cam_name in sample['multiview_multiple_human_cam_pred'].keys():
             if len(sample['multiview_multiple_human_cam_pred'][cam_name].keys()) == 0:
@@ -837,6 +858,14 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         init_focal_length = im_focals[0] #scene.get_intrinsics()[0][0].detach().cpu().numpy()
         init_princpt = [256., 144.] #scene.get_intrinsics()[0][:2, 2].detach().cpu().numpy()
 
+        # # Make output name
+        # TEMP
+        output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"
+        # # if the file already exists, skip
+        # if osp.exists(osp.join(optim_output_dir, f'{output_name}.pkl')):
+        #     print(f"Skipping {output_name} because it already exists...")
+        #     continue
+
         """ Initialize the human parameters """
         print("Initializing human parameters")
         multiview_multiple_human_cam_pred = sample['multiview_multiple_human_cam_pred'] # Dict[camera_name -> Dict[human_name -> 'pose2d', 'bbox', 'params' Dicts]]
@@ -850,8 +879,8 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         multiview_multiperson_bboxes = defaultdict(dict)
         # make a dict of human_name -> Dict[cam_name -> (J, 3)]
         # make a dict of human_name -> Dict[cam_name -> (5)] for bboxes; xywh confidence
-        for cam_name in multiview_multiple_human_cam_pred.keys():
-            for human_name in multiview_multiple_human_cam_pred[cam_name].keys():
+        for cam_name in sorted(list(multiview_multiple_human_cam_pred.keys())):
+            for human_name in sorted(list(multiview_multiple_human_cam_pred[cam_name].keys())):
                 pose2d = multiview_multiple_human_cam_pred[cam_name][human_name]['pose2d']
                 pose2d[:, 2] = 1
                 bbox = multiview_multiple_human_cam_pred[cam_name][human_name]['bbox']
@@ -895,21 +924,20 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
             'human_params': copy.deepcopy(human_params),
             'human_inited_cam_poses': copy.deepcopy(human_inited_cam_poses),
         }
-        # human_params_to_optimize = []
-        # human_params_names_to_optimize = []
-        # for human_name, optim_target_dict in human_params.items():
-        #     for param_name in optim_target_dict.keys():
-        #         if optim_target_dict[param_name].requires_grad:
-        #             human_params_to_optimize.append(optim_target_dict[param_name])
-        #             human_params_names_to_optimize.append(f'{human_name}_{param_name}')
-        # print(f"Optimizing {len(human_params_names_to_optimize)} parameters of humans: {human_params_names_to_optimize}")
+        if num_of_humans_for_optimization is None:
+            num_of_humans_for_optimization = len(human_params)
+            print(f"Optimizing all {num_of_humans_for_optimization} humans")
+        else:
+            num_of_humans_for_optimization = min(num_of_humans_for_optimization, len(human_params))
+            print(f"Optimizing {num_of_humans_for_optimization} humans")
+            print(f"Names of humans to optimize: {sorted(list(human_params.keys()))[:num_of_humans_for_optimization]}")
 
         """ Initialize the scene parameters """
         # Initialize the scale factor between the dust3r cameras and the human_inited_cam_poses
         # Perform Procrustes alignment
         human_inited_cam_locations = []
         dust3r_cam_locations = []
-        for cam_name in human_inited_cam_poses.keys():
+        for cam_name in sorted(list(human_inited_cam_poses.keys())):
             human_inited_cam_locations.append(human_inited_cam_poses[cam_name][:3, 3])
             dust3r_cam_locations.append(im_poses[cam_names.index(cam_name)][:3, 3].cpu().numpy())
         human_inited_cam_locations = np.array(human_inited_cam_locations)
@@ -920,46 +948,71 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
                 scene_scale, _, _ = procrustes_align(human_inited_cam_locations, dust3r_cam_locations)
             elif len(human_inited_cam_locations) == 2:
                 # get the ratio between the two distances
-                dist_ratio = np.linalg.norm(human_inited_cam_locations[0] - human_inited_cam_locations[1]) / np.linalg.norm(dust3r_cam_locations[0] - dust3r_cam_locations[1])
+                hmr2_cam_dist = np.linalg.norm(human_inited_cam_locations[0] - human_inited_cam_locations[1])
+                dust3r_cam_dist = np.linalg.norm(dust3r_cam_locations[0] - dust3r_cam_locations[1])
+                # check dust3r failure
+                if dust3r_cam_dist < 1e-3: # camera distance is too small
+                    raise ValueError(f"Maybe Dust3r failure; Dust3r camera distance is too small: {dust3r_cam_dist:.3f}")
+                dist_ratio = hmr2_cam_dist / dust3r_cam_dist
                 scene_scale = dist_ratio
             else:
                 print("Not enough camera locations to perform Procrustes alignment or distance ratio calculation")
                 scene_scale = 80.0
-            # Scale little bit larget to ensure humans are inside the views
+            niter = max(int(niter_factor * scene_scale), min_niter)
+            # Scale little bit larger to ensure humans are inside the views
+            scene_scale = scene_scale * scale_increasing_factor
+
+            print(f"Dust3r to Human original scale ratio: {scene_scale}")
+            print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
+            print(f"Rescaled Dust3r to Human scale ratio: {scene_scale}")
+
+            # do the optimization again with scaled 3D points and camera poses
+            pts3d_scaled = [p * scene_scale for p in pts3d]
+            pts3d = pts3d_scaled
+            im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+
         except:
-            print("Error in Procrustes alignment or distance ratio calculation due to zero division...")
-            print(f"Skipping this sample {sample['sequence']}_{sample['frame']}_{''.join(cam_names)}...")
-            continue
+            # print("Error in Procrustes alignment or distance ratio calculation due to zero division...")
+            # print(f"Skipping this sample {sample['sequence']}_{sample['frame']}_{''.join(cam_names)}...")
+            # continue
+            print("Error in Procrustes alignment or distance ratio calculation due to Dust3r or HMR2 failure...")
+            print("Setting the scale to 80.0 and switch to HMR2 initialized camera poses")
+            scene_scale = 80.0
+            niter = max(int(niter_factor * scene_scale), min_niter)
+            scene_scale = scene_scale * scale_increasing_factor
 
-        print(f"Dust3r to Human scale ratio: {scene_scale}")
-        # TEMP
-        niter = int(niter_factor * scene_scale)
-        print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
-        scene_scale = scene_scale * scale_increasing_factor
-        print(f"Scaled Dust3r to Human scale ratio: {scene_scale}")
+            # Switch dust3r camera poses to the hmr2 initialized camera poses
+            for cam_name in sorted(list(human_inited_cam_poses.keys())):
+                im_poses[cam_names.index(cam_name)] = torch.from_numpy(human_inited_cam_poses[cam_name]).to(device)
 
-        # do the optimization again with scaled 3D points and camera poses
-        pts3d_scaled = [p * scene_scale for p in pts3d]
-        pts3d = pts3d_scaled
-        im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+            # do the optimization again with scaled 3D points and camera poses
+            # Is this meaningful? - Hongsuk
+            pts3d_scaled = [p * scene_scale for p in pts3d]
+            pts3d = pts3d_scaled
+            # Don't scale the camera locations
+            # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+        
+        # A's pseudo inverse A-1 @ b
+        # A.T @ A
+        # b = A @ scene_scale  # Dust3r @ HMR2 = scale    
+        # HMR2 @ Dust3r = scale 
+        # locations
 
         # define the scene class that will be optimized
         scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, has_human_cue=False)
         scene.norm_pw_scale = norm_pw_scale
 
         # initialize the scene parameters with the known poses or point clouds
-        if num_of_cams > 2:
-            if init == 'mst':
-                scene.init_default_mst(niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
-                print("Default MST init")
-            elif init == 'known_params_hongsuk':
+        if num_of_cams >= 2:
+            if init == 'known_params_hongsuk':
                 scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
                 print("Known params init")
-
+            else:
+                raise ValueError(f"Unknown initialization method: {init}")
         scene_params = [p for p in scene.parameters() if p.requires_grad]
 
         # Visualize the initilization of 3D human and 3D world
-        if first_cam_human_vertices is not None:
+        if vis and first_cam_human_vertices is not None:
             world_env = parse_to_save_data(scene, cam_names)
             try:
                 show_env_human_in_viser(world_env=world_env, world_scale_factor=1., smplx_vertices_dict=first_cam_human_vertices, smplx_faces=smplx_layer.faces)
@@ -1077,30 +1130,31 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
 
                 # Get human loss
                 human_loss_timer.tic()
-                losses['human_loss'], projected_joints = get_human_loss(smplx_layer_dict, human_params, cam_names, 
+                losses['human_loss'], projected_joints = get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, human_params, cam_names, 
                                                                       multiview_world2cam_4by4, multiview_intrinsics, 
                                                                       multiview_multiperson_poses2d, multiview_multiperson_bboxes, 
                                                                       shape_prior_weight, device)
                 losses['human_loss'] = human_loss_weight * losses['human_loss']
                 human_loss_timer.toc()
 
-                if bar.n in stage2_iter or bar.n in stage3_iter:
+                if num_of_cams > 2 and (bar.n in stage2_iter or bar.n in stage3_iter):
                     # Get scene loss
                     scene_loss_timer.tic()
                     losses['scene_loss'] = scene.dust3r_loss()
                     scene_loss_timer.toc()
 
-                    # Camera pose regularization (commented out but preserved)
-                    cam_centers = multiview_cam2world_4by4[:, :3, 3]  # (N, 3)
-                    cam_center_dist_totalpairs_dist = []
-                    for i in range(len(cam_centers)):
-                        for j in range(i+1, len(cam_centers)):
-                            dist = torch.norm(cam_centers[i] - cam_centers[j])
-                            cam_center_dist_totalpairs_dist.append(dist)
-                    cam_center_dist_total = torch.stack(cam_center_dist_totalpairs_dist)
-                    relative_dist_diff = torch.abs(cam_center_dist_total - init_cam_center_dist_total) / init_cam_center_dist_total
-                    losses['cam_pose_dist_loss'] = torch.nn.functional.relu(relative_dist_diff - dist_tol) * 100.0
-                    losses['cam_pose_dist_loss'] = torch.mean(losses['cam_pose_dist_loss'])
+                    # TEMP
+                    # # Camera pose regularization (commented out but preserved)
+                    # cam_centers = multiview_cam2world_4by4[:, :3, 3]  # (N, 3)
+                    # cam_center_dist_totalpairs_dist = []
+                    # for i in range(len(cam_centers)):
+                    #     for j in range(i+1, len(cam_centers)):
+                    #         dist = torch.norm(cam_centers[i] - cam_centers[j])
+                    #         cam_center_dist_totalpairs_dist.append(dist)
+                    # cam_center_dist_total = torch.stack(cam_center_dist_totalpairs_dist)
+                    # relative_dist_diff = torch.abs(cam_center_dist_total - init_cam_center_dist_total) / init_cam_center_dist_total
+                    # losses['cam_pose_dist_loss'] = torch.nn.functional.relu(relative_dist_diff - dist_tol) * 100.0
+                    # losses['cam_pose_dist_loss'] = torch.mean(losses['cam_pose_dist_loss'])
 
                 # Compute total loss
                 total_loss = sum(losses.values())
@@ -1134,7 +1188,6 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         print(f"Time taken: human_loss={human_loss_timer.total_time:g}s, scene_loss={scene_loss_timer.total_time:g}s, backward={gradient_timer.total_time:g}s")
 
         # Save output
-        output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"
         total_output = {}
         total_output['gt_world_cameras'] = world_gt_cameras
         total_output['gt_world_humans_smpl_params'] = world_multiple_human_3d_annot
@@ -1143,10 +1196,11 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         total_output['our_pred_humans_smplx_params'] = convert_human_params_to_numpy(human_params)
         total_output['dust3r_pred_world_cameras_and_structure'] = sample['dust3r_ga_output']
         total_output['hmr2_pred_humans_and_cameras'] = init_human_cam_data 
-    
-        print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
-        with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
-            pickle.dump(total_output, f)    
+        total_output['our_optimized_human_names'] = sorted(list(human_params.keys()))[:num_of_humans_for_optimization]
+
+        # print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
+        # with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
+        #     pickle.dump(total_output, f)    
         
         if vis:
             show_optimization_results(total_output['our_pred_world_cameras_and_structure'], human_params, smplx_layer_dict[1])
@@ -1272,4 +1326,17 @@ smplx_j3d = smplx_output.joints # (1, J, 3), joints in the world coordinate from
 smplx_j3d = smplx_j3d - smplx_j3d[:, 0:1, :] + root_transl # !ALWAYS! Fuck the params['transl']
 
 # If you are applying rotation to the global orientation, you have to always compensate the rotation of the root joint translation
+"""
+
+
+"""
+Ablation table
+# Compare Camera metrics / Human metrics / Structure metrics
+- HMR2 + HaMeR initialized humans in the world + scaled Dust3r cameras 
+- Ours
+
+Sota table
+- UnCaliPose (2022 BMVC, 2023 arxiv): compare camera metrics / human metrics
+- MvP (2021 NeuRIPS): compare camera metrics / human metrics
+- Mast3r: compare camera metrics / structure metrics
 """

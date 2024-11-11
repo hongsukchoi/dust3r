@@ -168,7 +168,7 @@ def show_env_in_viser(world_env_pkl: str = '', world_env: dict = None, world_sca
         world_env[img_name]['cam2world'][:3, 3] *= world_scale_factor
         # get new mask
         conf = world_env[img_name]['conf']
-        world_env[img_name]['msk'] = conf > 3.5
+        world_env[img_name]['msk'] = conf > 1.5
     
     # set viser
     server = viser.ViserServer()
