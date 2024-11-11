@@ -747,15 +747,16 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
 
     # Parameters I am tuning
     human_loss_weight = 5.0
-    stage2_start_idx_percentage = 0.5 #0.2
+    stage2_start_idx_percentage = 0.2 # 0.5 #0.2
     stage3_start_idx_percentage = 0.85 
     min_niter = 500
     niter = 300
-    niter_factor = 20 ##10 # niter = int(niter_factor * scene_scale)
+    niter_factor = 10 #20 ##10 # niter = int(niter_factor * scene_scale)
     lr = 0.015
     dist_tol = 0.3
     scale_increasing_factor = 2 #1.3
     num_of_humans_for_optimization = None
+    focal_break = 20 # default is 20 in dust3r code
     # identified_vitpose_hmr2_hamer_output_dir = None
 
     # EgoHumans data
@@ -772,7 +773,8 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'ablation_num_of_humans{num_of_humans_for_optimization}', f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'ablation_num_of_cams',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'gt_focal_no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
+    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'gt_focal_no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'aggressive_focal_optim',  f'num_of_cams{num_of_cams}')
 
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
     dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, identified_vitpose_hmr2_hamer_output_dir=identified_vitpose_hmr2_hamer_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
@@ -945,7 +947,24 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
 
         try:
             if len(human_inited_cam_locations) > 2:
-                scene_scale, _, _ = procrustes_align(human_inited_cam_locations, dust3r_cam_locations)
+                # human_inited_cam_locations: (N, 3), known, first row is the origin, which means it is (0,0,0)
+                # dust3r_cam_locations: (N, 3), known, first row is the origin, which means it is (0,0,0)
+                # scene_scale: scalar, unknown
+                # Solve least squares problem Ax=b to find optimal scale factor
+                # where A is dust3r_cam_locations, x is scene_scale, b is human_inited_cam_locations
+                # Reshape to match equation form
+                A = dust3r_cam_locations.reshape(-1, 1)  # (3N, 1)
+                b = human_inited_cam_locations.reshape(-1)  # (3N,)
+                
+                # Solve normal equation: (A^T A)x = A^T b
+                ATA = A.T @ A  # (1,1)
+                ATb = A.T @ b  # (1,)
+                
+                if ATA[0,0] > 1e-6:  # Check for numerical stability
+                    scene_scale = ATb[0] / ATA[0,0]  # Scalar solution
+                else:
+                    raise ValueError("Dust3r camera locations are too close to zero")
+                # scene_scale, _, _ = procrustes_align(human_inited_cam_locations, dust3r_cam_locations)
             elif len(human_inited_cam_locations) == 2:
                 # get the ratio between the two distances
                 hmr2_cam_dist = np.linalg.norm(human_inited_cam_locations[0] - human_inited_cam_locations[1])
@@ -991,26 +1010,21 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
             pts3d = pts3d_scaled
             # Don't scale the camera locations
             # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
-        
-        # A's pseudo inverse A-1 @ b
-        # A.T @ A
-        # b = A @ scene_scale  # Dust3r @ HMR2 = scale    
-        # HMR2 @ Dust3r = scale 
-        # locations
 
         # define the scene class that will be optimized
-        scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, has_human_cue=False)
+        scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, focal_break=focal_break, has_human_cue=False)
         scene.norm_pw_scale = norm_pw_scale
 
         # initialize the scene parameters with the known poses or point clouds
         if num_of_cams >= 2:
             if init == 'known_params_hongsuk':
+                print(f"Using known params initialization; im_focals: {im_focals}")
                 scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
                 
-                # TEMP; use gt focal lengthes and affine transform (divide by 7.5) and make it fixed
-                im_focals = [world_gt_cameras[cam_name]['K'][0] / 7.5 for cam_name in cam_names]
-                scene.preset_focal(im_focals, msk=None)
-                scene.im_focals.requires_grad = False
+                # # TEMP; use gt focal lengthes and affine transform (divide by 7.5) and make it fixed
+                # im_focals = [world_gt_cameras[cam_name]['K'][0] / 7.5 for cam_name in cam_names]
+                # scene.preset_focal(im_focals, msk=None)
+                # scene.im_focals.requires_grad = False
 
                 print("Known params init")
             else:
@@ -1204,9 +1218,9 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         total_output['hmr2_pred_humans_and_cameras'] = init_human_cam_data 
         total_output['our_optimized_human_names'] = sorted(list(human_params.keys()))[:num_of_humans_for_optimization]
 
-        print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
-        with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
-            pickle.dump(total_output, f)    
+        # print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
+        # with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
+        #     pickle.dump(total_output, f)    
         
         if vis:
             show_optimization_results(total_output['our_pred_world_cameras_and_structure'], human_params, smplx_layer_dict[1])
