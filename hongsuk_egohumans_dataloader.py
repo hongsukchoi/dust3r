@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as tvf
 import numpy as np
 import scipy.spatial
 from scipy.optimize import linear_sum_assignment
@@ -33,7 +34,7 @@ for coco_idx, coco_name in enumerate(COCO_WHOLEBODY_KEYPOINTS):
         smpl_to_coco_mapping[coco_idx] = smpl_idx
 
 class EgoHumansDataset(Dataset):
-    def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
+    def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, use_sam2_mask=False, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
         """
         Args:
             data_root (str): Root directory of the dataset
@@ -49,6 +50,7 @@ class EgoHumansDataset(Dataset):
         self.egohumans_image_size_tuple = (2160, 3840) # (height, width)
         self.subsample_rate = subsample_rate
         self.optimize_human = optimize_human
+        self.use_sam2_mask = use_sam2_mask
         # choose camera names
         if cam_names is None:
             self.camera_names = None
@@ -348,11 +350,16 @@ class EgoHumansDataset(Dataset):
                         bbox_annot_path = bbox_annot_path.replace('/home/hongsuk/projects/egohumans/data', self.data_root)
                     colmap_dir = os.path.join(self.data_root, big_seq_name, small_seq, 'colmap', 'workplace')
 
+                    # get SAM2 masks!
+                    sam2_mask_path = os.path.join(self.data_root, big_seq_name, small_seq, 'processed_data', 'hongsuk_pred_yolo_sam2_propagated', \
+                                                camera_name, f'{frame+1:05d}.npy')
+                    
                     per_frame_data['annot_and_img_paths'][camera_name] = {
                         'pose2d_annot_path': pose2d_annot_path,
                         'bbox_annot_path': bbox_annot_path,
                         'img_path': img_path,
-                        'colmap_dir': colmap_dir
+                        'colmap_dir': colmap_dir,
+                        'sam2_mask_path': sam2_mask_path
                     }
 
                     if self.identified_vitpose_hmr2_hamer_output_dir is not None:
@@ -551,6 +558,92 @@ class EgoHumansDataset(Dataset):
                     dust3r_ga_output_and_gt_cameras = pickle.load(f)
                 dust3r_ga_output = dust3r_ga_output_and_gt_cameras['dust3r_ga']
 
+        """ load SAM2 masks """
+        # get the inverse of the affine transform and apply it to the sam2 mask so that it is in the dust3r image space and overlay the mask on the image from the multiview_images and save the overlayed image
+        if self.use_sam2_mask:
+            multiview_dust3r_masks = []
+            for cam in selected_cameras:
+                sam2_mask_path = sample['annot_and_img_paths'][cam]['sam2_mask_path']
+                if os.path.exists(sam2_mask_path):
+                    sam2_mask_dict = np.load(sam2_mask_path, allow_pickle=True)[()]  # original image shape(H, W) uint8 
+                    # 0: mask for first person, 1: mask for second person, ...
+                else:
+                    sam2_mask_dict = None
+                    raise ValueError(f'No SAM2 mask found for {cam}!')
+                # Get dust3r image dimensions from multiview_images
+                dust3r_h, dust3r_w = multiview_images[cam]['img'].shape[1:]  # CHW format
+                
+                # Get inverse of dust3r_to_org_img_affine_transform to go from original to dust3r space
+                dust3r_to_org_img_affine_transform = multiview_affine_transforms[cam] # (2,3)
+                org_img_to_dust3r_affine_transform = cv2.invertAffineTransform(dust3r_to_org_img_affine_transform)
+                
+                dust3r_masks = []
+                for person_idx, sam2_mask in sam2_mask_dict.items():
+                    # Warp the mask to dust3r image space using cv2.warpAffine
+                    dust3r_mask = cv2.warpAffine(sam2_mask.astype(np.uint8), 
+                                            org_img_to_dust3r_affine_transform,
+                                            (dust3r_w, dust3r_h),
+                                            flags=cv2.INTER_NEAREST)
+                    dust3r_masks.append(dust3r_mask)
+                dust3r_masks = sum(dust3r_masks) # (H, W)
+                # Visualize the dust3r masks in the dust3r image space
+                # dust3r_img = img_to_pil(multiview_images[first_cam]['img'])
+                # dust3r_img = np.array(dust3r_img)
+                
+                # # Create overlay
+                # overlay = dust3r_img.copy()
+                # overlay[dust3r_mask == 1] = overlay[dust3r_mask == 1] * 0.5 + np.array([255, 0, 0], dtype=np.uint8) * 0.5
+                
+                # # Save overlayed image
+                # save_dir = './vis_sam2_mask'
+                # os.makedirs(save_dir, exist_ok=True)
+                # save_path = os.path.join(save_dir, f'dust3r_space_sam2_mask_overlay.jpg')
+                # cv2.imwrite(save_path, cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+                multiview_dust3r_masks.append(dust3r_masks)
+
+            multiview_dust3r_masks = np.stack(multiview_dust3r_masks, axis=0) # (N, H, W)
+
+        """ Apply SAM2 masks to dust3r network output confidence maps """
+        if self.use_sam2_mask and self.dust3r_raw_output_dir is not None:
+            # Get confidence maps
+            conf1 = dust3r_network_output['pred1']['conf']  # shape: [12, 288, 512]
+            conf2 = dust3r_network_output['pred2']['conf']
+            
+            # Get view indices that tell us which camera each prediction corresponds to
+            view1_idx = dust3r_network_output['view1']['idx']  # tensor([1, 2, 2, 3, 3, 3, 0, 0, 1, 0, 1, 2])
+            view2_idx = dust3r_network_output['view2']['idx']  # tensor([0, 0, 1, 0, 1, 2, 1, 2, 2, 3, 3, 3])
+            
+            # Convert dust3r masks to torch tensor and move to same device as conf maps
+            multiview_dust3r_masks = torch.from_numpy(multiview_dust3r_masks).to(conf1.device)  # [N, H, W]
+            multiview_dust3r_masks = multiview_dust3r_masks.bool() # human: 1, background: 0
+
+            # For each prediction in view1, apply the corresponding camera's mask
+            for pred_idx, cam_idx in enumerate(view1_idx):
+                conf1[pred_idx][multiview_dust3r_masks[cam_idx]] = conf1[pred_idx].min()
+                    
+            # For each prediction in view2, apply the corresponding camera's mask
+            for pred_idx, cam_idx in enumerate(view2_idx):
+                conf2[pred_idx][multiview_dust3r_masks[cam_idx]] = conf2[pred_idx].min()
+            
+            # Update the confidence maps in the network output
+            dust3r_network_output['pred1']['conf'] = conf1
+            dust3r_network_output['pred2']['conf'] = conf2
+
+            # # Optionally visualize the masked confidence maps
+            # import matplotlib.pyplot as plt
+            # plt.figure(figsize=(20,10))
+            # for i in range(min(6, len(conf1))):
+            #     plt.subplot(2,6,i+1)
+            #     plt.imshow(conf1[i].cpu().numpy())
+            #     plt.title(f'View1 Conf {i}\nCam {selected_cameras[view1_idx[i]]}')
+            #     plt.subplot(2,6,i+7)
+            #     plt.imshow(conf2[i].cpu().numpy())
+            #     plt.title(f'View2 Conf {i}\nCam {selected_cameras[view2_idx[i]]}')
+            # plt.tight_layout()
+            # plt.savefig('masked_conf_maps.png')
+            # plt.close()
+            # import pdb; pdb.set_trace()
+
         """ load 2d annot for human optimization later; GT parameters """
         if self.optimize_human: # not used now (Nov 7th 2024)
             multiview_multiple_human_2d_cam_annot = {}
@@ -623,8 +716,12 @@ class EgoHumansDataset(Dataset):
                 multiview_multiple_human_cam_pred = {}
                 for camera_name in selected_cameras:
                     identified_vitpose_hmr2_hamer_output_path = sample['annot_and_img_paths'][camera_name]['identified_vitpose_hmr2_hamer_output_path']
-                    with open(identified_vitpose_hmr2_hamer_output_path, 'rb') as f:
-                        multiview_multiple_human_cam_pred[camera_name] = pickle.load(f)
+                    try:
+                        with open(identified_vitpose_hmr2_hamer_output_path, 'rb') as f:
+                            multiview_multiple_human_cam_pred[camera_name] = pickle.load(f)
+                    except:
+                        print(f"Error loading identified vitpose hmr2 hamer output for {camera_name}. Assigning empty dict to this camera view.")
+                        multiview_multiple_human_cam_pred[camera_name] = {}
             else:
                 multiview_multiple_human_cam_pred = {}
 
@@ -750,15 +847,15 @@ class EgoHumansDataset(Dataset):
                                             } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
                     multiview_multiple_human_cam_pred[camera_name] = mono_pred_output_dict
 
-                    # SAVE_
-                    # self.vitpose_hmr2_hamer_output_dir,
-                    save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8')
-                    mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
-                    Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
-                    mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
-                    with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
-                        pickle.dump(mono_pred_output_dict, f)
-                    print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
+                    # # SAVE_
+                    # # self.vitpose_hmr2_hamer_output_dir,
+                    # save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8')
+                    # mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
+                    # Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
+                    # mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
+                    # with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
+                    #     pickle.dump(mono_pred_output_dict, f)
+                    # print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
 
         # Load all required data
         # Data dictionary contains:
@@ -1233,7 +1330,12 @@ def get_multihmr_camera_parameters(img_size, fov=60, p_x=None, p_y=None):
 
     return K
 
-def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
+def img_to_pil(img):
+    img = (img + 1) / 2
+    img = tvf.ToPILImage()(img)
+    return img
+
+def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, use_sam2_mask=False, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
     """
     Create a dataloader for the multiview human dataset
     
@@ -1258,6 +1360,7 @@ def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=Non
         subsample_rate=subsample_rate,
         cam_names=cam_names,
         num_of_cams=num_of_cams,
+        use_sam2_mask=use_sam2_mask,
         selected_big_seq_list=selected_big_seq_list,
         selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple
     )
