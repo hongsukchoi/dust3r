@@ -250,6 +250,7 @@ def main(pkl_root_dir: Path, align_scale: bool = False) -> None:
             "our_pred_humans_smplx_params",
             "hmr2_pred_humans_and_cameras",
             "dust3r_pred_world_cameras_and_structure",
+            "our_optimized_human_names"
         }
 
         metrics = compute_relpose_metrics(

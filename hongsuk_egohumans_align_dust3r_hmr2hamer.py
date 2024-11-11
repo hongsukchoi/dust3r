@@ -747,7 +747,6 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
 
     # Parameters I am tuning
     human_loss_weight = 5.0
-    # TEMP
     stage2_start_idx_percentage = 0.5 #0.2
     stage3_start_idx_percentage = 0.85 
     min_niter = 500
@@ -765,14 +764,15 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
     selected_small_seq_start_and_end_idx_tuple = None if len(sel_small_seq_range) == 0 else sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
     # num_of_cams = 3
-    num_of_cams = 10 # 2
+    num_of_cams = 4 # 2
     subsample_rate = 100 
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
     dust3r_ga_output_dir = osp.join(dust3r_ga_output_dir, f'num_of_cams{num_of_cams}')
     # TEMP
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'ablation_num_of_humans{num_of_humans_for_optimization}', f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'ablation_num_of_cams',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
+    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'gt_focal_no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
 
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
     dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, identified_vitpose_hmr2_hamer_output_dir=identified_vitpose_hmr2_hamer_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
@@ -858,9 +858,9 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         init_focal_length = im_focals[0] #scene.get_intrinsics()[0][0].detach().cpu().numpy()
         init_princpt = [256., 144.] #scene.get_intrinsics()[0][:2, 2].detach().cpu().numpy()
 
-        # # Make output name
-        # TEMP
+        # Make output name
         output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"
+        # TEMP
         # # if the file already exists, skip
         # if osp.exists(osp.join(optim_output_dir, f'{output_name}.pkl')):
         #     print(f"Skipping {output_name} because it already exists...")
@@ -1006,6 +1006,12 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         if num_of_cams >= 2:
             if init == 'known_params_hongsuk':
                 scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+                
+                # TEMP; use gt focal lengthes and affine transform (divide by 7.5) and make it fixed
+                im_focals = [world_gt_cameras[cam_name]['K'][0] / 7.5 for cam_name in cam_names]
+                scene.preset_focal(im_focals, msk=None)
+                scene.im_focals.requires_grad = False
+
                 print("Known params init")
             else:
                 raise ValueError(f"Unknown initialization method: {init}")
@@ -1183,7 +1189,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
                                 # draw the index
                                 # img = cv2.putText(img, f"{idx}", (int(joint[0]), int(joint[1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                         cv2.imwrite(osp.join(vis_output_path, f'{sample["sequence"]}_{sample["frame"]}_{cam_name}_{bar.n}.png'), img[:, :, ::-1])
-                
+        
         print("Final losses:", ' '.join([f'{k}={v.item():g}' for k, v in losses.items()]))
         print(f"Time taken: human_loss={human_loss_timer.total_time:g}s, scene_loss={scene_loss_timer.total_time:g}s, backward={gradient_timer.total_time:g}s")
 
@@ -1198,9 +1204,9 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         total_output['hmr2_pred_humans_and_cameras'] = init_human_cam_data 
         total_output['our_optimized_human_names'] = sorted(list(human_params.keys()))[:num_of_humans_for_optimization]
 
-        # print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
-        # with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
-        #     pickle.dump(total_output, f)    
+        print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
+        with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
+            pickle.dump(total_output, f)    
         
         if vis:
             show_optimization_results(total_output['our_pred_world_cameras_and_structure'], human_params, smplx_layer_dict[1])
