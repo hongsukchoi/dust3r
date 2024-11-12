@@ -624,7 +624,7 @@ def convert_human_params_to_numpy(human_params):
 
     return human_params_np
 
-def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/dust3r_ga_outputs_and_gt_cameras_random_sampled_views', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/dust3r_ga_outputs_and_gt_cameras_random_sampled_views', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_dir, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
@@ -635,7 +635,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
     stage3_start_idx_percentage = 0.85 
     min_niter = 500
     niter = 300
-    niter_factor = 10 #20 ##10 # niter = int(niter_factor * scene_scale)
+    niter_factor = 20 #20 ##10 # niter = int(niter_factor * scene_scale)
     lr = 0.015
     dist_tol = 0.3
     scale_increasing_factor = 2 #1.3
@@ -658,8 +658,12 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'ablation_num_of_cams',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'gt_focal_no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'aggressive_focal_optim',  f'num_of_cams{num_of_cams}')
-
+    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'aggressive_focal_optim',  f'num_of_cams{num_of_cams}')
+    if not use_gt_focal:
+        optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
+    else:
+        optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
+    print(f"Optimizing output directory: {optim_output_dir}")
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
     dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, identified_vitpose_hmr2_hamer_output_dir=identified_vitpose_hmr2_hamer_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
 
@@ -764,7 +768,7 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         multiview_multiperson_poses2d = defaultdict(dict)
         multiview_multiperson_bboxes = defaultdict(dict)
         # make a dict of human_name -> Dict[cam_name -> (J, 3)]
-        # make a dict of human_name -> Dict[cam_name -> (5)] for bboxes; xywh confidence
+        # make a dict of human_name -> Dict[cam_name -> (5)] for bboxes; xyxy confidence
         for cam_name in sorted(list(multiview_multiple_human_cam_pred.keys())):
             for human_name in sorted(list(multiview_multiple_human_cam_pred[cam_name].keys())):
                 pose2d = multiview_multiple_human_cam_pred[cam_name][human_name]['pose2d']
@@ -905,10 +909,12 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
                 print(f"Using known params initialization; im_focals: {im_focals}")
                 scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
                 
-                # # TEMP; use gt focal lengthes and affine transform (divide by 7.5) and make it fixed
-                # im_focals = [world_gt_cameras[cam_name]['K'][0] / 7.5 for cam_name in cam_names]
-                # scene.preset_focal(im_focals, msk=None)
-                # scene.im_focals.requires_grad = False
+                if use_gt_focal:    
+                    # TEMP; use gt focal lengthes and affine transform (divide by 7.5) and make it fixed
+                    print("Using GroundTruth focal lengths")
+                    im_focals = [world_gt_cameras[cam_name]['K'][0] / 7.5 for cam_name in cam_names]
+                    scene.preset_focal(im_focals, msk=None)
+                    scene.im_focals.requires_grad = False
 
                 print("Known params init")
             else:
@@ -1102,9 +1108,9 @@ def main(output_dir: str = './outputs/egohumans/', sel_big_seqs: List = [], sel_
         total_output['hmr2_pred_humans_and_cameras'] = init_human_cam_data 
         total_output['our_optimized_human_names'] = sorted(list(human_params.keys()))[:num_of_humans_for_optimization]
 
-        # print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
-        # with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
-        #     pickle.dump(total_output, f)    
+        print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
+        with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
+            pickle.dump(total_output, f)    
         
         if vis:
             show_optimization_results(total_output['our_pred_world_cameras_and_structure'], human_params, smplx_layer_dict[1])

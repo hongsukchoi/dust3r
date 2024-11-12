@@ -125,7 +125,9 @@ def show_optimization_results(world_env, human_params, smplx_layer):
         right_hand_pose = optim_target_dict['right_hand_pose'].reshape(1, -1)
         transl = optim_target_dict['transl'].reshape(1, -1)
         # decode the smpl mesh and joints
-        smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose, transl=transl)
+        # smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose, transl=transl)
+
+        smplx_output = smplx_layer(body_pose=body_pose.float(), betas=betas.float(), global_orient=global_orient.float(), left_hand_pose=left_hand_pose.float(), right_hand_pose=right_hand_pose.float(), transl=transl.float())
 
         smplx_vertices_dict[human_name] = smplx_output.vertices[0].detach().cpu().numpy()
 
@@ -399,7 +401,7 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
     dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl'
     prefit_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/results/prefit.pkl'
     vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'
-    frame_idx = 384
+    frame_idx = 384 # for testing, we always use frame 
     sequence_name = 'utokyo_cpr_2005_34_2'
     vitpose_path_pattern = '/scratch/partial_datasets/egoexo4d_v2/processed_20240718/takes/utokyo_cpr_2005_34_2/preprocessing/cam0*__vitpose.pkl'
     bytetrack_path_pattern = '/scratch/partial_datasets/egoexo4d_v2/processed_20240718/takes/utokyo_cpr_2005_34_2/preprocessing/cam0*__bbox_with_score_used.pkl'
@@ -414,11 +416,11 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
 
     # Parameters I am tuning
     human_loss_weight = 5.0
-    stage2_start_idx_percentage = 0.0 # 0.5 #0.2
-    stage3_start_idx_percentage = 0.9 
+    stage2_start_idx_percentage = 0.2 #0.0 # 0.5 #0.2
+    stage3_start_idx_percentage = 0.8 #0.9 
     min_niter = 500
     niter = 300
-    niter_factor = 10 #20 ##10 # niter = int(niter_factor * scene_scale)
+    niter_factor = 20 #20 ##10 # niter = int(niter_factor * scene_scale)
     lr = 0.01
     dist_tol = 0.3
     scale_increasing_factor = 2 #1.3
@@ -459,15 +461,21 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
 
     
     # 2) im_focals (K), im_poses (T)
-    with open(prefit_path, 'rb') as f:
-        prefit = pickle.load(f)
+    with open(vitpose_and_gt_path, 'rb') as f:
+        vitpose_and_gt_dict = pickle.load(f)
+    # with open(prefit_path, 'rb') as f:
+    #     prefit = pickle.load(f)
     # adjust the niter according to the scene scale
-    scene_scale = prefit['cam']['alpha']
-    niter = int(niter_factor * scene_scale)
+    scene_scale = vitpose_and_gt_dict['alpha'].cpu().numpy()  #prefit['cam']['alpha']
+    niter = max(int(niter_factor * scene_scale), min_niter)
+    scene_scale = scene_scale * scale_increasing_factor
     print(f"Adjusted niter to {niter} according to the scene scale {scene_scale} * {niter_factor}")
 
-    im_intrinsics = prefit['cam']['K'] # (N, 3, 3)
-    im_poses = prefit['cam']['T'] # (N, 4, 4)
+    im_intrinsics = vitpose_and_gt_dict['K'].cpu().numpy() #prefit['cam']['K'] # (N, 3, 3)
+    im_poses = vitpose_and_gt_dict['T'].cpu().numpy() #prefit['cam']['T'] # (N, 4, 4)
+    # TEMP
+    im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+
     # Apply inverse affine matrices to intrinsics
     # For each camera, multiply the intrinsic matrix by the inverse affine matrix
     # This inv affine matrix transforms the intrinsics from the original image space to the dust3r resized space
@@ -522,7 +530,19 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
     # show_env_in_viser(world_env=modified_dust3r_ga_output, world_scale_factor=1.)
 
     # 3) human parameters
+    # TEMP; hardcoded for aria01
+    prefit = {
+        'human': {
+            'body_pose': vitpose_and_gt_dict['body_pose'].cpu().numpy(),
+            'global_orient': vitpose_and_gt_dict['global_orient'].cpu().numpy(),
+            'betas': vitpose_and_gt_dict['betas'].cpu().numpy(),
+            'left_hand_pose': vitpose_and_gt_dict['left_hand_pose'].cpu().numpy(),
+            'right_hand_pose': vitpose_and_gt_dict['right_hand_pose'].cpu().numpy(),
+            'transl': vitpose_and_gt_dict['transl'].cpu().numpy(),
+        }
+    }
     human_params = {'aria01': prefit['human']}
+
     smplx_layer_dict = {
         # key: number of humans
         1: smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', 
@@ -566,9 +586,9 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
     #         multiview_multiperson_bboxes['aria01'][osp.basename(bytetrack_path).split('__bbox_with_score_used')[0]] = torch.from_numpy(bbox).to(device)
     
     # load vitpose from cleaned data; and also load the ground truth joints2d
-    with open(vitpose_and_gt_path, 'rb') as f:
-        vitpose_and_gt_dict = pickle.load(f)
-
+    # with open(vitpose_and_gt_path, 'rb') as f:
+    #     vitpose_and_gt_dict = pickle.load(f)
+    # import pdb; pdb.set_trace()
     vitposeplus_2d_keypoints = vitpose_and_gt_dict['keypoints'] # (1, num_cams, 1, 135, 3)
     vitposeplus_2d_keypoints = vitposeplus_2d_keypoints[0, :, 0].numpy() # (num_cams, 135, 3)
     # change the joint order
