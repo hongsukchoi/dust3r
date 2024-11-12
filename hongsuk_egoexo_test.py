@@ -24,12 +24,60 @@ from dust3r.cloud_opt.commons import cosine_schedule, linear_schedule
 
 from hongsuk_vis_viser_env_only import show_env_in_viser
 from hongsuk_vis_viser_env_human import show_env_human_in_viser
-from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, ORIGINAL_SMPLX_JOINT_NAMES, COCO_MAIN_BODY_SKELETON
+from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, ORIGINAL_SMPLX_JOINT_NAMES, COCO_MAIN_BODY_SKELETON, VITPOSEPLUS_KEYPOINTS
 
 coco_main_body_end_joint_idx = COCO_WHOLEBODY_KEYPOINTS.index('right_heel') 
 coco_main_body_joint_idx = list(range(coco_main_body_end_joint_idx + 1))
 coco_main_body_joint_names = COCO_WHOLEBODY_KEYPOINTS[:coco_main_body_end_joint_idx + 1]
 smplx_main_body_joint_idx = [ORIGINAL_SMPLX_JOINT_NAMES.index(joint_name) for joint_name in coco_main_body_joint_names] 
+# Create mapping from VITPOSEPLUS_KEYPOINTS to COCO_WHOLEBODY_KEYPOINTS
+vitposeplus_to_coco_mapper = [] # ex) vitposeplus_2d_keypoints[vitposeplus_to_coco_mapper] = coco_wholebody_2d_keypoints
+for coco_idx, coco_joint_name in enumerate(COCO_WHOLEBODY_KEYPOINTS):
+    # Direct name matches
+    if coco_joint_name in VITPOSEPLUS_KEYPOINTS:
+        vitposeplus_to_coco_mapper.append(VITPOSEPLUS_KEYPOINTS.index(coco_joint_name))
+    else:
+        print(f'Warning: {coco_joint_name} is not in VITPOSEPLUS_KEYPOINTS, adding None instead')
+        vitposeplus_to_coco_mapper.append(None)
+assert len(vitposeplus_to_coco_mapper) == len(COCO_WHOLEBODY_KEYPOINTS)
+# Count non-None elements in vitposeplus_to_coco_mapper
+non_none_count = sum(1 for x in vitposeplus_to_coco_mapper if x is not None)
+assert non_none_count == 131, f"Expected 131 non-None elements in vitposeplus_to_coco_mapper, but got {non_none_count}"
+
+
+def draw_joints2d(joints2d, img_paths, output_dir, conf_threshold=0.2):
+    # Draw joints2d on each image with index labels
+
+    # Use single color for visualization
+    joint_color = (0, 255, 0)  # Green color in BGR
+    
+    for cam_idx, img_path in enumerate(img_paths):
+        # Read image
+        img = cv2.imread(img_path)
+        
+        # Draw each joint
+        for joint_idx, joint in enumerate(joints2d[cam_idx]):
+            # Get x,y coordinates and confidence
+            x, y, conf = joint
+            
+            # Skip if low confidence
+            if conf < conf_threshold:
+                continue
+                
+            # Convert to integer coordinates
+            x = int(x)
+            y = int(y)
+            
+            # Draw circle at joint location
+            cv2.circle(img, (x,y), 3, joint_color, -1)
+            
+            # Draw joint index
+            cv2.putText(img, str(joint_idx), (x+5,y+5), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, joint_color, 1)
+            
+        # Save annotated image
+        output_path = osp.join(output_dir, f'joints2d_{cam_idx}.png')
+        cv2.imwrite(output_path, img)
 
 class Timer:
     def __init__(self):
@@ -316,6 +364,31 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
 
     return total_loss, projected_joints
 
+def get_bboxes_from_joints2d(joints2d: np.ndarray):
+    # joints2d: (num_cams, 135, 3) where last dim is (x,y,conf)
+    # return: (num_cams, 5) where last dim is (x1,y1,x2,y2,conf)
+    
+    num_cams = joints2d.shape[0]
+    bboxes = np.zeros((num_cams, 5))
+    
+    for cam_idx in range(num_cams):
+        # Get valid joints (confidence > 0)
+        valid_joints = joints2d[cam_idx, :, :2][joints2d[cam_idx, :, 2] > 0]
+        
+        if len(valid_joints) > 0:
+            # Get min/max x,y coordinates for bounding box
+            x1 = np.min(valid_joints[:, 0])
+            y1 = np.min(valid_joints[:, 1]) 
+            x2 = np.max(valid_joints[:, 0])
+            y2 = np.max(valid_joints[:, 1])
+            
+            # Average confidence of all joints
+            conf = np.mean(joints2d[cam_idx, :, 2])
+            
+            bboxes[cam_idx] = [x1, y1, x2, y2, conf]
+            
+    return bboxes
+
 def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
     # Pipeline
     # 1) dust3r_network_output from /scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images
@@ -325,12 +398,15 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
     # 5) Final optimization
     dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl'
     prefit_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/results/prefit.pkl'
+    vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'
     frame_idx = 384
     sequence_name = 'utokyo_cpr_2005_34_2'
     vitpose_path_pattern = '/scratch/partial_datasets/egoexo4d_v2/processed_20240718/takes/utokyo_cpr_2005_34_2/preprocessing/cam0*__vitpose.pkl'
     bytetrack_path_pattern = '/scratch/partial_datasets/egoexo4d_v2/processed_20240718/takes/utokyo_cpr_2005_34_2/preprocessing/cam0*__bbox_with_score_used.pkl'
     vitpose_paths = sorted(glob.glob(vitpose_path_pattern))
     bytetrack_paths = sorted(glob.glob(bytetrack_path_pattern))
+    img_paths = sorted(glob.glob('/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/*.png'))
+
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_dir, 'vis')
@@ -339,7 +415,7 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
     # Parameters I am tuning
     human_loss_weight = 5.0
     stage2_start_idx_percentage = 0.0 # 0.5 #0.2
-    stage3_start_idx_percentage = 0.85 
+    stage3_start_idx_percentage = 0.9 
     min_niter = 500
     niter = 300
     niter_factor = 10 #20 ##10 # niter = int(niter_factor * scene_scale)
@@ -394,7 +470,7 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
     im_poses = prefit['cam']['T'] # (N, 4, 4)
     # Apply inverse affine matrices to intrinsics
     # For each camera, multiply the intrinsic matrix by the inverse affine matrix
-    # This transforms the intrinsics from dust3r resized space back to original image space
+    # This inv affine matrix transforms the intrinsics from the original image space to the dust3r resized space
     transformed_intrinsics = []
     for i, (K, inv_affine) in enumerate(zip(im_intrinsics, inv_affine_matrices)):
         # Convert inv_affine to 3x3 by adding [0,0,1] row
@@ -476,18 +552,48 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
     # 4) load the multiview_multiperson_poses2d, multiview_multiperson_bboxes from ViTPose output, which are the targets for optimization
     # multiview_multiperson_poses2d: Dict[human_name -> Dict[cam_name -> (J, 3)]]
     # multiview_multiperson_bboxes: Dict[human_name -> Dict[cam_name -> (5)]]
+
     multiview_multiperson_poses2d = {'aria01': {}}
     multiview_multiperson_bboxes = {'aria01': {}}
-    for vitpose_path, bytetrack_path in zip(vitpose_paths, bytetrack_paths):
-        with open(vitpose_path, 'rb') as f:
-            # TEMP; hardcoded for aria01
-            pose2d = pickle.load(f)[frame_idx][0] # (1, J, 3) -> (J, 3)
-            multiview_multiperson_poses2d['aria01'][osp.basename(vitpose_path).split('__vitpose')[0]] = torch.from_numpy(pose2d).to(device)
-        with open(bytetrack_path, 'rb') as f:
-            # TEMP; hardcoded for aria01
-            bbox = pickle.load(f)[frame_idx][0] # (1, 5) -> (5)
-            multiview_multiperson_bboxes['aria01'][osp.basename(bytetrack_path).split('__bbox_with_score_used')[0]] = torch.from_numpy(bbox).to(device)
+    # for vitpose_path, bytetrack_path in zip(vitpose_paths, bytetrack_paths):
+    #     with open(vitpose_path, 'rb') as f:
+    #         # TEMP; hardcoded for aria01
+    #         pose2d = pickle.load(f)[frame_idx][0] # (1, J, 3) -> (J, 3)
+    #         multiview_multiperson_poses2d['aria01'][osp.basename(vitpose_path).split('__vitpose')[0]] = torch.from_numpy(pose2d).to(device)
+    #     with open(bytetrack_path, 'rb') as f:
+    #         # TEMP; hardcoded for aria01
+    #         bbox = pickle.load(f)[frame_idx][0] # (1, 5) -> (5)
+    #         multiview_multiperson_bboxes['aria01'][osp.basename(bytetrack_path).split('__bbox_with_score_used')[0]] = torch.from_numpy(bbox).to(device)
     
+    # load vitpose from cleaned data; and also load the ground truth joints2d
+    with open(vitpose_and_gt_path, 'rb') as f:
+        vitpose_and_gt_dict = pickle.load(f)
+
+    vitposeplus_2d_keypoints = vitpose_and_gt_dict['keypoints'] # (1, num_cams, 1, 135, 3)
+    vitposeplus_2d_keypoints = vitposeplus_2d_keypoints[0, :, 0].numpy() # (num_cams, 135, 3)
+    # change the joint order
+    coco_wholebody_2d_keypoints = np.zeros((len(cam_names), len(COCO_WHOLEBODY_KEYPOINTS), 3)) # (num_cams, 133, 3)
+    # For each camera and joint where mapper is not None, copy the keypoint data
+    for coco_idx, vitpose_idx in enumerate(vitposeplus_to_coco_mapper):
+        if vitpose_idx is not None:
+            coco_wholebody_2d_keypoints[:, coco_idx, :] = vitposeplus_2d_keypoints[:, vitpose_idx, :]
+    joints2d = coco_wholebody_2d_keypoints
+
+    # Vis: draw_joints2d(joints2d, img_paths=img_paths, output_dir='./', conf_threshold=0.1)
+
+    # Map the joints2d to the dust3r resized space
+    for cam_idx, inv_affine in enumerate(inv_affine_matrices):
+        homo_joints2d = np.concatenate([joints2d[cam_idx, :, :2], np.ones((joints2d.shape[1], 1))], axis=1)
+        joints2d[cam_idx, :, :2] = (inv_affine @ homo_joints2d.T)[:2].T
+
+    # get bounding boxes from the joints2d
+    bboxes = get_bboxes_from_joints2d(joints2d) # (num_cams, 5)
+    # TEMP
+    # just assign 1
+    bboxes[:, 4] = 1.
+    for cam_name in cam_names:
+        multiview_multiperson_poses2d['aria01'][cam_name] = torch.from_numpy(joints2d[cam_names.index(cam_name)]).to(device)
+        multiview_multiperson_bboxes['aria01'][cam_name] = torch.from_numpy(bboxes[cam_names.index(cam_name)]).to(device)
 
     # 5) Final optimization
     # Logistics 
@@ -524,8 +630,10 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
                 optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 1, lr)
                 print("\n1st stage optimization starts at ", bar.n)
             elif len(stage2_iter) > 0 and bar.n == stage2_iter[0]:
-                human_loss_weight = 10.
-                lr_base = lr = 0.01
+                # human_loss_weight = 10.
+                human_loss_weight = 1.
+                # TEMP
+                # lr_base = lr = 0.01
                 optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 2, lr)
                 print("\n2nd stage optimization starts at ", bar.n)
                 # Reinitialize the scene
@@ -534,9 +642,9 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
                 im_focals = [intrinsic[0,0] for intrinsic in scene_intrinsics]
                 im_poses = scene.get_im_poses().detach()
                 im_poses[:, :3, 3] = im_poses[:, :3, 3] * residual_scene_scale.item()
-                pts3d = scene.get_pts3d()
-                pts3d_scaled = [p * residual_scene_scale.item() for p in pts3d]
-                scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d_scaled, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+                # pts3d = scene.get_pts3d()
+                # pts3d_scaled = [p * residual_scene_scale.item() for p in pts3d]
+                scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=None, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
                 print("Known params init")
                     
                 if False and vis:
@@ -545,8 +653,9 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
                     show_optimization_results(world_env, human_params, smplx_layer_dict[1])
 
             elif len(stage3_iter) > 0 and bar.n == stage3_iter[0]:
-                human_loss_weight = 5.
-
+                # human_loss_weight = 5.
+                human_loss_weight = 1.
+                
                 optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 3, lr)
                 print("\n3rd stage optimization starts at ", bar.n)
 
@@ -610,16 +719,18 @@ def main(output_dir: str = './outputs/egoexo/', vis: bool = False):
             bar.update()
 
             if bar.n == 1 or bar.n == bar.total or vis and bar.n % save_2d_pose_vis == 0:
-                for cam_name, human_joints in projected_joints.items():
+                for cam_idx, (cam_name, human_joints) in enumerate(projected_joints.items()):
                     img = scene.imgs[cam_names.index(cam_name)].copy() * 255.
                     img = img.astype(np.uint8)
                     for human_name, joints in human_joints.items():
                         # darw the human name
                         img = cv2.putText(img, human_name, (int(joints[0, 0]), int(joints[0, 1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                        for idx, joint in enumerate(joints):
+                        for idx, (joint, gt_joint) in enumerate(zip(joints, joints2d[cam_idx])):
                             img = cv2.circle(img, (int(joint[0]), int(joint[1])), 1, (0, 255, 0), -1)
-                            # draw the index
-                            # img = cv2.putText(img, f"{idx}", (int(joint[0]), int(joint[1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            # draw the gt joint
+                            if gt_joint[2] > 0.1:
+                                img = cv2.circle(img, (int(gt_joint[0]), int(gt_joint[1])), 1, (0, 0, 255), -1)
+
                     cv2.imwrite(osp.join(vis_output_path, f'{sequence_name}_{frame_idx:05d}_{cam_name}_{bar.n}.png'), img[:, :, ::-1])
     
     print("Final losses:", ' '.join([f'{k}={v.item():g}' for k, v in losses.items()]))
