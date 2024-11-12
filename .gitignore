@@ -5,6 +5,8 @@ checkpoints/
 models/
 inputs/
 outputs/
+vis_keypoints/
+inspect_egohumans_reid/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

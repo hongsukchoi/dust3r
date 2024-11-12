@@ -385,7 +385,6 @@ class EgoHumansDataset(Dataset):
         sample = copy.deepcopy(self.datalist[idx])
         seq = sample['sequence']
         frame = sample['frame']
-
         """ get camera parameters; GT parameters """
         cameras = sample['cameras'] 
         # Align cameras to first camera frame
@@ -846,7 +845,7 @@ class EgoHumansDataset(Dataset):
                                                 'params': {key: mono_multiple_human_3d_cam_pred[key][i] for key in mono_multiple_human_3d_cam_pred.keys()} # dictionary of human parameters
                                             } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
                     multiview_multiple_human_cam_pred[camera_name] = mono_pred_output_dict
-
+                import pdb; pdb.set_trace()
                     # # SAVE_
                     # # self.vitpose_hmr2_hamer_output_dir,
                     # save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8')
@@ -1391,7 +1390,7 @@ if __name__ == '__main__':
     # Combine lists of sequences
     # selected_big_seq_list = ['01_tagging', '02_lego', '03_fencing', '04_basketball', '05_volleyball', '06_badminton', '07_tennis']
     selected_big_seq_list = ['06_badminton'] #['07_tennis'] # ['04_basketball', '05_volleyball'] # ['01_tagging', '02_lego', '03_fencing']  #-> might stop because of scipy infinity bug
-    selected_small_seq_start_and_end_idx_tuple = (30, 34)
+    selected_small_seq_start_and_end_idx_tuple = (1, 1)
     num_of_cams = None
     data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
     vitpose_hmr2_hamer_output_dir = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready' 

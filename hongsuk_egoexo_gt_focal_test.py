@@ -453,7 +453,7 @@ def show_ground_truth_scene(ground_truth, scene_point_size=0.006, point_shape='c
     import pdb; pdb.set_trace()
     print("Done visualizing")
 
-def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path: str = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl', vitpose_and_gt_path: str = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'):
+def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_trial1_use_gt_focal', use_gt_focal: bool = True, vis: bool = False, dust3r_network_output_path: str = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl', vitpose_and_gt_path: str = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'):
     # Pipeline
     # 1) dust3r_network_output from /scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images
     # 2) im_focals (K), im_poses (T) from /scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/results/prefit.pkl, ['cam']['K'], ['cam']['T']
@@ -589,8 +589,15 @@ def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_g
     num_of_cams = len(cam_names)
     if num_of_cams >= 2:
         if init == 'known_params_hongsuk':
-            # im_focals: np.array to list of scalars
-            im_focals = [im_intrinsics[i][0][0] for i in range(len(cam_names))]
+            if use_gt_focal:
+                # TEMP; use gt focal lengthes and affine transform (divide by 7.5) and make it fixed
+                print("Using GroundTruth focal lengths")
+                im_focals = [vitpose_and_gt_dict['K'][i][0,0] / 7.5 for i in range(len(cam_names))]
+                scene.preset_focal(im_focals, msk=None)
+                scene.im_focals.requires_grad = False
+            else:
+                # im_focals: np.array to list of scalars
+                im_focals = [im_intrinsics[i][0][0] for i in range(len(cam_names))]
             # im_poses: numpy to torch
             im_poses = [torch.from_numpy(im_poses[i]).to(device) for i in range(len(cam_names))]
             im_poses = torch.stack(im_poses)
