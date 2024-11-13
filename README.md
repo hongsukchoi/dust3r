@@ -1,3 +1,11 @@
+# Quick README Nov 12th 2024
+
+If you want to run the script for one sequence (ex. 013_tennis_400), you can do the following:
+```bash
+python hongsuk_egohumans_align_dust3r_hmr2hamer.py --sel-big-seqs 03_fencing --sel-small-seq-range 1 1 --vis
+```
+
+
 
 # Quick Commands
 

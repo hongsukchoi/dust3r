@@ -636,12 +636,12 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     stage3_start_idx_percentage = 0.85 
     min_niter = 500
     niter = 300
-    niter_factor = 10 #20 ##10 # niter = int(niter_factor * scene_scale)
+    niter_factor = 10 # decides the length of optimization # 20 ##10 # niter = int(niter_factor * scene_scale)
     lr = 0.015
     dist_tol = 0.3
     scale_increasing_factor = 1.3 #1.3 #2 #1.3
     num_of_humans_for_optimization = None
-    focal_break = 20 # default is 20 in dust3r code
+    focal_break = 20 # default is 20 in dust3r code, lower the more focal length can change
     # identified_vitpose_hmr2_hamer_output_dir = None
 
     # EgoHumans data
