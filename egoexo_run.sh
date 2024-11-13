@@ -18,6 +18,6 @@ while IFS=',' read -r dust3r_path prefit_path input_data_path; do
         --dust3r-network-output-path "$dust3r_path" \
         --vitpose-and-gt-path "$input_data_path" \
         --output-dir "./outputs/egoexo/nov11/sota_comparison_trial1" \
-        # --vis 
+        --vis 
 
 done < egoexo4d_result_paths_val.txt

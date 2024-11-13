@@ -863,13 +863,13 @@ def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_g
     total_output['hmr2_pred_humans_and_cameras'] = init_human_cam_data 
     total_output['our_optimized_human_names'] = sorted(list(human_params.keys()))[:num_of_humans_for_optimization]
 
-    # Create output name with final losses
-    output_name += '_final_loses'
-    for k, v in losses.items():
-        output_name += f'_{k}_{v.item():.2f}'
-    print("Saving to ", osp.join(output_dir, f'{output_name}.pkl'))
-    with open(osp.join(output_dir, f'{output_name}.pkl'), 'wb') as f:
-        pickle.dump(total_output, f)    
+    # # Create output name with final losses
+    # output_name += '_final_loses'
+    # for k, v in losses.items():
+    #     output_name += f'_{k}_{v.item():.2f}'
+    # print("Saving to ", osp.join(output_dir, f'{output_name}.pkl'))
+    # with open(osp.join(output_dir, f'{output_name}.pkl'), 'wb') as f:
+    #     pickle.dump(total_output, f)    
 
     if vis:
         show_optimization_results(parse_to_save_data(scene, cam_names), human_params, smplx_layer_dict[1])
