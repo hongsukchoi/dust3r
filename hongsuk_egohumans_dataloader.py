@@ -38,7 +38,7 @@ coco_main_body_end_joint_idx = COCO_WHOLEBODY_KEYPOINTS.index('right_heel')
 coco_main_body_joint_idx = list(range(coco_main_body_end_joint_idx + 1))
 
 class EgoHumansDataset(Dataset):
-    def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, use_sam2_mask=False, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
+    def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, use_sam2_mask=False, human_detection_threshold=0.5, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
         """
         Args:
             data_root (str): Root directory of the dataset
@@ -55,6 +55,8 @@ class EgoHumansDataset(Dataset):
         self.subsample_rate = subsample_rate
         self.optimize_human = optimize_human
         self.use_sam2_mask = use_sam2_mask
+        self.human_detection_threshold = human_detection_threshold
+
         # choose camera names
         if cam_names is None:
             self.camera_names = None
@@ -244,14 +246,14 @@ class EgoHumansDataset(Dataset):
             big_seq_name = self.big_seq_name_dict[small_seq.split('_')[1]]
             num_frames = annot['num_frames']
 
-            # TEMP
-            if small_seq not in TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['sel_small_seq_and_frames'].keys():
-                continue
+            # # TEMP
+            # if small_seq not in TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['sel_small_seq_and_frames'].keys():
+            #     continue
 
             for frame in range(num_frames):
-                # TEMP
-                if frame+1 not in TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['sel_small_seq_and_frames'][small_seq]:
-                    continue
+                # # TEMP
+                # if frame+1 not in TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['sel_small_seq_and_frames'][small_seq]:
+                #     continue
                 if  frame % self.subsample_rate != 0: # frame == 0
                     continue
 
@@ -305,8 +307,8 @@ class EgoHumansDataset(Dataset):
                             else:
                                 # TEMP
                                 # New camera sampling Nov 12th 2024
-                                selected_cam_idx_starts_from_1 = TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['selected_cam_names']
-                                selected_cameras = [available_cameras[idx-1] for idx in selected_cam_idx_starts_from_1]
+                                selected_cam_idx_str_list = TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['selected_cam_names']
+                                selected_cameras = [f'cam{idx:02d}' for idx in selected_cam_idx_str_list]
                                 # New camera sampling that I (Hongsuk) used after Nov 6th 2024
                                 # random sampling
                                 # selected_cameras = random.sample(available_cameras, self.num_of_cams)
@@ -327,9 +329,15 @@ class EgoHumansDataset(Dataset):
                 
                 # sanitize camera data
                 per_frame_data['cameras'] = {}
+                skip_this_frame = False
                 for cam in selected_cameras:
-                    annot_cam = annot['cameras'][cam]
-                    per_frame_data['cameras'][cam] = annot_cam 
+                    try:
+                        annot_cam = annot['cameras'][cam]
+                        per_frame_data['cameras'][cam] = annot_cam 
+                    except:
+                        print(f'Warning: {small_seq}_{frame} does not have camera {cam}')
+                        skip_this_frame = True
+                        break
 
                     # cam2world_R = annot_cam['cam2world_R']
                     # cam2world_t = annot_cam['cam2world_t']
@@ -348,6 +356,8 @@ class EgoHumansDataset(Dataset):
                     # cy = K[3]
                     # K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
                     # per_frame_data['cameras'][cam]['K'] = K
+                if skip_this_frame:
+                    continue    
 
                 # add 2d pose and bbox annot data
                 per_frame_data['annot_and_img_paths'] = {}
@@ -782,6 +792,15 @@ class EgoHumansDataset(Dataset):
                     mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[unique_mono_pred_indices]
                     mono_multiple_human_3d_cam_pred = {key: mono_multiple_human_3d_cam_pred[key][unique_mono_pred_indices] for key in mono_multiple_human_3d_cam_pred.keys()}
                
+                    # Sanity check: check if the main body joints are valid
+                    mono_multiple_human_2d_cam_pred_pose_main_body = mono_multiple_human_2d_cam_pred_pose[:, coco_main_body_joint_idx, :]
+                    human_detection_threshold = self.human_detection_threshold
+                    mono_multiple_human_2d_cam_pred_pose_main_body_conf = mono_multiple_human_2d_cam_pred_pose_main_body[:, :, 2].mean(axis=1)
+                    valid_human_mask = mono_multiple_human_2d_cam_pred_pose_main_body_conf > human_detection_threshold
+                    mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[valid_human_mask]
+                    mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[valid_human_mask]
+                    mono_multiple_human_3d_cam_pred = {key: mono_multiple_human_3d_cam_pred[key][valid_human_mask] for key in mono_multiple_human_3d_cam_pred.keys()}
+                    
                     # Visualization of pose2d and bbox predictions
                     # pred_pose2d = mono_multiple_human_2d_cam_pred_pose
                     # # Draw predicted keypoints in green
@@ -951,7 +970,7 @@ def vec_image_from_cam(intrinsics, point_3d, eps=1e-9):
 
     return point_2d
 
-def nms_unique_pose2d_indices(pose2d, threshold=30):
+def nms_unique_pose2d_indices(pose2d, threshold=100):
     # threshold: pixel distance threshold
     # pose2d is a list of np.ndarray shape (133, 2+1)
     # do NMS on the 2D keypoints and return the unique indices for the list
@@ -1351,7 +1370,7 @@ def img_to_pil(img):
     img = tvf.ToPILImage()(img)
     return img
 
-def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, use_sam2_mask=False, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
+def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, batch_size=8, split='train', num_workers=4, subsample_rate=10, cam_names=None, num_of_cams=None, use_sam2_mask=False, human_detection_threshold=0.5, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
     """
     Create a dataloader for the multiview human dataset
     
@@ -1378,7 +1397,8 @@ def create_dataloader(data_root, optimize_human=False, dust3r_raw_output_dir=Non
         num_of_cams=num_of_cams,
         use_sam2_mask=use_sam2_mask,
         selected_big_seq_list=selected_big_seq_list,
-        selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple
+        selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple,
+        human_detection_threshold=human_detection_threshold
     )
     
     dataloader = DataLoader(
@@ -1405,16 +1425,20 @@ if __name__ == '__main__':
     # ['01_tagging', '02_lego', '03_fencing']  ['04_basketball'] '5_volleyball', ['06_badminton'] 07_tennis
     
     # Combine lists of sequences
+    # badminton 35,61 
+    # tennis 6,13
+    # else all small sequences
     # selected_big_seq_list = ['01_tagging', '02_lego', '03_fencing', '04_basketball', '05_volleyball', '06_badminton', '07_tennis']
-    selected_big_seq_list = ['06_badminton'] #['07_tennis'] # ['04_basketball', '05_volleyball'] # ['01_tagging', '02_lego', '03_fencing']  #-> might stop because of scipy infinity bug
-    selected_small_seq_start_and_end_idx_tuple = (1, 1)
+    selected_big_seq_list = ['07_tennis'] 
+    selected_small_seq_start_and_end_idx_tuple = (6, 13)  
     num_of_cams = 4
     data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
     vitpose_hmr2_hamer_output_dir = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready' 
     dust3r_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
     dust3r_ga_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
-    subsample_rate = 10
-    dataset, dataloader = create_dataloader(data_root, subsample_rate=subsample_rate, optimize_human=True, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
+    subsample_rate = 50 
+    human_detection_threshold = 0.5
+    dataset, dataloader = create_dataloader(data_root, subsample_rate=subsample_rate, human_detection_threshold=human_detection_threshold, optimize_human=True, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
 
     dataset_len = len(dataset)
     step = 1

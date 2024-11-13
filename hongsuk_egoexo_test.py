@@ -453,7 +453,7 @@ def show_ground_truth_scene(ground_truth, scene_point_size=0.006, point_shape='c
     import pdb; pdb.set_trace()
     print("Done visualizing")
 
-def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path: str = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl', vitpose_and_gt_path: str = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'):
+def main(output_dir: str = './outputs/egoexo/nov12/sota_comparison_trial1', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path: str = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl', vitpose_and_gt_path: str = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'):
     # Pipeline
     # 1) dust3r_network_output from /scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images
     # 2) im_focals (K), im_poses (T) from /scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/results/prefit.pkl, ['cam']['K'], ['cam']['T']
@@ -463,6 +463,10 @@ def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_g
     # dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl'
     # prefit_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/results/prefit.pkl'
     # vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'
+    
+    dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/uniandes_dance_024_16/preprocessing/dust3r_world_env_2/001569/images/dust3r_network_output_pointmaps_images.pkl'
+    vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_07/val/uniandes_dance_024_16/1572/input_data.pkl'
+    
     sequence_name = dust3r_network_output_path.split('/')[6]  #'utokyo_cpr_2005_34_2'
     frame_idx = int(dust3r_network_output_path.split('/')[-3]) #384 # for testing
 
@@ -527,8 +531,6 @@ def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_g
     # 2) im_focals (K), im_poses (T)
     with open(vitpose_and_gt_path, 'rb') as f:
         vitpose_and_gt_dict = pickle.load(f)
-    import pdb; pdb.set_trace()
-
     # show_ground_truth_scene(vitpose_and_gt_dict)
 
     # with open(prefit_path, 'rb') as f:
@@ -864,13 +866,13 @@ def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_g
     total_output['hmr2_pred_humans_and_cameras'] = init_human_cam_data 
     total_output['our_optimized_human_names'] = sorted(list(human_params.keys()))[:num_of_humans_for_optimization]
 
-    # # Create output name with final losses
-    # output_name += '_final_loses'
-    # for k, v in losses.items():
-    #     output_name += f'_{k}_{v.item():.2f}'
-    # print("Saving to ", osp.join(output_dir, f'{output_name}.pkl'))
-    # with open(osp.join(output_dir, f'{output_name}.pkl'), 'wb') as f:
-    #     pickle.dump(total_output, f)    
+    # Create output name with final losses
+    output_name += '_final_loses'
+    for k, v in losses.items():
+        output_name += f'_{k}_{v.item():.2f}'
+    print("Saving to ", osp.join(output_dir, f'{output_name}.pkl'))
+    with open(osp.join(output_dir, f'{output_name}.pkl'), 'wb') as f:
+        pickle.dump(total_output, f)    
 
     if vis:
         show_optimization_results(parse_to_save_data(scene, cam_names), human_params, smplx_layer_dict[1])
