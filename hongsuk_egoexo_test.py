@@ -688,7 +688,7 @@ def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_g
     for coco_idx, vitpose_idx in enumerate(vitposeplus_to_coco_mapper):
         if vitpose_idx is not None:
             coco_wholebody_2d_keypoints[:, coco_idx, :] = vitposeplus_2d_keypoints[:, vitpose_idx, :]
-    joints2d = coco_wholebody_2d_keypoints
+    joints2d = coco_wholebody_2d_keypoints # (num_cams, 133, 3)
 
     # Vis: draw_joints2d(joints2d, img_paths=img_paths, output_dir='./', conf_threshold=0.1)
 

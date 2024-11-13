@@ -34,6 +34,9 @@ for coco_idx, coco_name in enumerate(COCO_WHOLEBODY_KEYPOINTS):
         smpl_idx = SMPL_45_KEYPOINTS.index(coco_name)
         smpl_to_coco_mapping[coco_idx] = smpl_idx
 
+coco_main_body_end_joint_idx = COCO_WHOLEBODY_KEYPOINTS.index('right_heel') 
+coco_main_body_joint_idx = list(range(coco_main_body_end_joint_idx + 1))
+
 class EgoHumansDataset(Dataset):
     def __init__(self, data_root, optimize_human=True, dust3r_raw_output_dir=None, dust3r_ga_output_dir=None, vitpose_hmr2_hamer_output_dir=None, identified_vitpose_hmr2_hamer_output_dir=None, multihmr_output_path=None, split='train', subsample_rate=10, cam_names=None, num_of_cams=None, use_sam2_mask=False, selected_big_seq_list=[], selected_small_seq_start_and_end_idx_tuple=None):
         """
@@ -778,6 +781,7 @@ class EgoHumansDataset(Dataset):
                     mono_multiple_human_2d_cam_pred_pose = mono_multiple_human_2d_cam_pred_pose[unique_mono_pred_indices]
                     mono_multiple_human_2d_cam_pred_bbox = mono_multiple_human_2d_cam_pred_bbox[unique_mono_pred_indices]
                     mono_multiple_human_3d_cam_pred = {key: mono_multiple_human_3d_cam_pred[key][unique_mono_pred_indices] for key in mono_multiple_human_3d_cam_pred.keys()}
+               
                     # Visualization of pose2d and bbox predictions
                     # pred_pose2d = mono_multiple_human_2d_cam_pred_pose
                     # # Draw predicted keypoints in green
@@ -859,7 +863,7 @@ class EgoHumansDataset(Dataset):
                                             } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
                     multiview_multiple_human_cam_pred[camera_name] = mono_pred_output_dict
 
-                    # SAVE_
+                    # SAVE the identified predictions
                     # self.vitpose_hmr2_hamer_output_dir,
                     save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov12')
                     mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
@@ -1404,12 +1408,12 @@ if __name__ == '__main__':
     # selected_big_seq_list = ['01_tagging', '02_lego', '03_fencing', '04_basketball', '05_volleyball', '06_badminton', '07_tennis']
     selected_big_seq_list = ['06_badminton'] #['07_tennis'] # ['04_basketball', '05_volleyball'] # ['01_tagging', '02_lego', '03_fencing']  #-> might stop because of scipy infinity bug
     selected_small_seq_start_and_end_idx_tuple = (1, 1)
-    num_of_cams = None
+    num_of_cams = 4
     data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
     vitpose_hmr2_hamer_output_dir = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready' 
     dust3r_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
     dust3r_ga_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
-    subsample_rate = 100
+    subsample_rate = 10
     dataset, dataloader = create_dataloader(data_root, subsample_rate=subsample_rate, optimize_human=True, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
 
     dataset_len = len(dataset)
