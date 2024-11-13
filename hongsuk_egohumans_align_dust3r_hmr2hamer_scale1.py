@@ -665,7 +665,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     # else:
     #     optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, f'2024nov13_good_cams',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, f'2024nov13_good_cams_ablation_scale1',  f'num_of_cams{num_of_cams}')
 
     print(f"Optimizing output directory: {optim_output_dir}")
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
@@ -874,14 +874,14 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             # Scale little bit larger to ensure humans are inside the views
             scene_scale = scene_scale * scale_increasing_factor
 
-            print(f"Dust3r to Human original scale ratio: {scene_scale}")
-            print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
-            print(f"Rescaled Dust3r to Human scale ratio: {scene_scale}")
+            # print(f"Dust3r to Human original scale ratio: {scene_scale}")
+            # print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
+            # print(f"Rescaled Dust3r to Human scale ratio: {scene_scale}")
 
-            # do the optimization again with scaled 3D points and camera poses
-            pts3d_scaled = [p * scene_scale for p in pts3d]
-            pts3d = pts3d_scaled
-            im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+            # # do the optimization again with scaled 3D points and camera poses
+            # pts3d_scaled = [p * scene_scale for p in pts3d]
+            # pts3d = pts3d_scaled
+            # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
 
         except:
             # print("Error in Procrustes alignment or distance ratio calculation due to zero division...")
@@ -893,16 +893,27 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             niter = max(int(niter_factor * scene_scale), min_niter)
             scene_scale = scene_scale * scale_increasing_factor
 
-            # Switch dust3r camera poses to the hmr2 initialized camera poses
-            for cam_name in sorted(list(human_inited_cam_poses.keys())):
-                im_poses[cam_names.index(cam_name)] = torch.from_numpy(human_inited_cam_poses[cam_name]).to(device)
+            # # Switch dust3r camera poses to the hmr2 initialized camera poses
+            # for cam_name in sorted(list(human_inited_cam_poses.keys())):
+            #     im_poses[cam_names.index(cam_name)] = torch.from_numpy(human_inited_cam_poses[cam_name]).to(device)
 
-            # do the optimization again with scaled 3D points and camera poses
-            # Is this meaningful? - Hongsuk
-            pts3d_scaled = [p * scene_scale for p in pts3d]
-            pts3d = pts3d_scaled
-            # Don't scale the camera locations
-            # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+            # # do the optimization again with scaled 3D points and camera poses
+            # # Is this meaningful? - Hongsuk
+            # pts3d_scaled = [p * scene_scale for p in pts3d]
+            # pts3d = pts3d_scaled
+            # # Don't scale the camera locations
+            # # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+
+        print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
+
+        print("### Ablation on scale initialization ###")
+        scene_scale = 1.0
+        print(f"Dust3r to Human original scale ratio: {scene_scale}")
+
+        # do the optimization again with scaled 3D points and camera poses
+        pts3d_scaled = [p * scene_scale for p in pts3d]
+        pts3d = pts3d_scaled
+        im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
 
         # define the scene class that will be optimized
         scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, focal_break=focal_break, has_human_cue=False)

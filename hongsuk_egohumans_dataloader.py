@@ -1259,7 +1259,7 @@ def load_scene_geometry(colmap_dir, max_dist=0.1):
     points3D_rgb = np.concatenate(points3D_rgb, axis=0)
 
     # Get the Gaussian mean and std of the errors
-    # And filter out the points with error larger than 2 std
+    # And filter out the points with error larger than 1 std
     mean_error = np.mean(errors)
     std_error = np.std(errors)
     threshold = 1 * std_error
@@ -1425,12 +1425,12 @@ if __name__ == '__main__':
     # ['01_tagging', '02_lego', '03_fencing']  ['04_basketball'] '5_volleyball', ['06_badminton'] 07_tennis
     
     # Combine lists of sequences
-    # badminton 35,61 
+    # badminton 1 20
     # tennis 6,13
     # else all small sequences
     # selected_big_seq_list = ['01_tagging', '02_lego', '03_fencing', '04_basketball', '05_volleyball', '06_badminton', '07_tennis']
-    selected_big_seq_list = ['07_tennis'] 
-    selected_small_seq_start_and_end_idx_tuple = (6, 13)  
+    selected_big_seq_list = ['06_badminton'] 
+    selected_small_seq_start_and_end_idx_tuple = (1, 20)  
     num_of_cams = 4
     data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
     vitpose_hmr2_hamer_output_dir = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready' 
