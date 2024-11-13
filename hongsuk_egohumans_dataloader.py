@@ -24,6 +24,7 @@ from multihmr.utils import normalize_rgb, get_focalLength_from_fieldOfView
 from multihmr.utils import get_smplx_joint_names
 
 from hongsuk_joint_names import COCO_WHOLEBODY_KEYPOINTS, SMPLX_JOINT_NAMES, SMPL_45_KEYPOINTS
+from hongsuk_egohumans_data import TEST_SET_DEPENDING_ON_NUM_OF_CAMS
 
 # Create mapping from SMPL_45_KEYPOINTS to COCO_WHOLEBODY_KEYPOINTS indices
 smpl_to_coco_mapping = np.zeros(len(COCO_WHOLEBODY_KEYPOINTS), dtype=np.int64)
@@ -240,9 +241,15 @@ class EgoHumansDataset(Dataset):
             big_seq_name = self.big_seq_name_dict[small_seq.split('_')[1]]
             num_frames = annot['num_frames']
 
+            # TEMP
+            if small_seq not in TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['sel_small_seq_and_frames'].keys():
+                continue
 
             for frame in range(num_frames):
-                if frame == 0 or frame % self.subsample_rate != 0:
+                # TEMP
+                if frame+1 not in TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['sel_small_seq_and_frames'][small_seq]:
+                    continue
+                if  frame % self.subsample_rate != 0: # frame == 0
                     continue
 
                 per_frame_data = {
@@ -293,10 +300,14 @@ class EgoHumansDataset(Dataset):
                             if len(available_cameras) < self.num_of_cams:
                                 selected_cameras = available_cameras
                             else:
+                                # TEMP
+                                # New camera sampling Nov 12th 2024
+                                selected_cam_idx_starts_from_1 = TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['selected_cam_names']
+                                selected_cameras = [available_cameras[idx-1] for idx in selected_cam_idx_starts_from_1]
                                 # New camera sampling that I (Hongsuk) used after Nov 6th 2024
                                 # random sampling
-                                selected_cameras = random.sample(available_cameras, self.num_of_cams)
-                                selected_cameras.sort()
+                                # selected_cameras = random.sample(available_cameras, self.num_of_cams)
+                                # selected_cameras.sort()
 
                                 # Previous camera sampling that I (Hongsuk) used before Nov 6th 2024
                                 # if self.num_of_cams <= 2:
@@ -307,6 +318,8 @@ class EgoHumansDataset(Dataset):
                                 #     selected_cameras = [available_cameras[i] for i in indices]
 
                 """ add camera data """
+                print(f'Big sequence: {big_seq_name}, small sequence: {small_seq}, selected cameras: {selected_cameras} frame: {frame}')
+
                 # per_frame_data['cameras'] = annot['cameras'] # dictionrary of camera names and their parameters
                 
                 # sanitize camera data
@@ -845,16 +858,16 @@ class EgoHumansDataset(Dataset):
                                                 'params': {key: mono_multiple_human_3d_cam_pred[key][i] for key in mono_multiple_human_3d_cam_pred.keys()} # dictionary of human parameters
                                             } for i in range(len(mono_pred_human_names)) if mono_pred_human_names[i] is not None}
                     multiview_multiple_human_cam_pred[camera_name] = mono_pred_output_dict
-                import pdb; pdb.set_trace()
-                    # # SAVE_
-                    # # self.vitpose_hmr2_hamer_output_dir,
-                    # save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8')
-                    # mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
-                    # Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
-                    # mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
-                    # with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
-                    #     pickle.dump(mono_pred_output_dict, f)
-                    # print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
+
+                    # SAVE_
+                    # self.vitpose_hmr2_hamer_output_dir,
+                    save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov12')
+                    mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
+                    Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
+                    mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
+                    with open(mono_multiple_human_sanitized_save_path, 'wb') as f:
+                        pickle.dump(mono_pred_output_dict, f)
+                    print(f'Saved sanitized predictions to {mono_multiple_human_sanitized_save_path}')
 
         # Load all required data
         # Data dictionary contains:

@@ -491,12 +491,12 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
         optim_target_dict[human_name]['root_transl'] = nn.Parameter(human_params['root_transl'].float().to(device)) # (1, 3)
 
         # TEMP
-        # make relative_rotvec, shape, expression not require grad
-        optim_target_dict[human_name]['body_pose'].requires_grad = False
-        # optim_target_dict[human_name]['global_orient'].requires_grad = False
-        optim_target_dict[human_name]['betas'].requires_grad = False
-        optim_target_dict[human_name]['left_hand_pose'].requires_grad = False
-        optim_target_dict[human_name]['right_hand_pose'].requires_grad = False
+        # # make relative_rotvec, shape, expression not require grad
+        # optim_target_dict[human_name]['body_pose'].requires_grad = False
+        # # optim_target_dict[human_name]['global_orient'].requires_grad = False
+        # optim_target_dict[human_name]['betas'].requires_grad = False
+        # optim_target_dict[human_name]['left_hand_pose'].requires_grad = False
+        # optim_target_dict[human_name]['right_hand_pose'].requires_grad = False
 
     return optim_target_dict, cam_poses, first_cam_human_vertices
 
@@ -625,7 +625,7 @@ def convert_human_params_to_numpy(human_params):
 
     return human_params_np
 
-def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/dust3r_ga_outputs_and_gt_cameras_random_sampled_views', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov12_good_cams', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/2024nov12_good_cams', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov8', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_dir, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
@@ -642,7 +642,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     scale_increasing_factor = 1.3 #1.3 #2 #1.3
     num_of_humans_for_optimization = None
     focal_break = 20 # default is 20 in dust3r code, lower the more focal length can change
-    # identified_vitpose_hmr2_hamer_output_dir = None
+    identified_vitpose_hmr2_hamer_output_dir = None # TEMP
 
     # EgoHumans data
     # Fix batch size to 1 for now   
@@ -650,7 +650,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     selected_small_seq_start_and_end_idx_tuple = None if len(sel_small_seq_range) == 0 else sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
     # num_of_cams = 3
-    num_of_cams = 10 # 2
+    num_of_cams = 4
     subsample_rate = 100 
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
     dust3r_ga_output_dir = osp.join(dust3r_ga_output_dir, f'num_of_cams{num_of_cams}')
@@ -660,10 +660,13 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'gt_focal_no_cam_reg_long_optim',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'aggressive_focal_optim',  f'num_of_cams{num_of_cams}')
-    if not use_gt_focal:
-        optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
-    else:
-        optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
+    # if not use_gt_focal:
+    #     optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
+    # else:
+    #     optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
+    # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, f'2024nov12_good_cams',  f'num_of_cams{num_of_cams}')
+
     print(f"Optimizing output directory: {optim_output_dir}")
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
     dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, identified_vitpose_hmr2_hamer_output_dir=identified_vitpose_hmr2_hamer_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)

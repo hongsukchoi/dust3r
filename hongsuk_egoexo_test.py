@@ -527,6 +527,7 @@ def main(output_dir: str = './outputs/egoexo/nov11/sota_comparison_tria1', use_g
     # 2) im_focals (K), im_poses (T)
     with open(vitpose_and_gt_path, 'rb') as f:
         vitpose_and_gt_dict = pickle.load(f)
+    import pdb; pdb.set_trace()
 
     # show_ground_truth_scene(vitpose_and_gt_dict)
 

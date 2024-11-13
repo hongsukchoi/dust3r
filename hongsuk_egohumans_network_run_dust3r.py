@@ -25,9 +25,9 @@ def main(output_dir: str = './outputs/egohumans/', egohumans_data_root: str = '.
     # Fix batch size to 1 for now
     selected_big_seq_list = []
     cam_names = None # ['cam01', 'cam02', 'cam03', 'cam04']
-    num_of_cams = 10 # 2, 3, 4, 5, 10
-    subsample_rate = 100
-    output_dir = osp.join(output_dir, 'dust3r_raw_outputs', 'dust3r_raw_outputs_random_sampled_views', f'num_of_cams{num_of_cams}')
+    num_of_cams = 4 # 2, 3, 4, 5, 10
+    subsample_rate = 50 #100
+    output_dir = osp.join(output_dir, 'dust3r_raw_outputs', '2024nov12_good_cams', f'num_of_cams{num_of_cams}')
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     dataset, dataloader = create_dataloader(egohumans_data_root, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list)
 
@@ -65,6 +65,7 @@ def main(output_dir: str = './outputs/egohumans/', egohumans_data_root: str = '.
             'output': output,
             'img_names': (sample['sequence'], sample['frame'].tolist(), cam_names)
         }
+
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f'{sample["sequence"][0]}_{sample["frame"].item()}.pkl')
         print(f'Saving output to {output_path}')
