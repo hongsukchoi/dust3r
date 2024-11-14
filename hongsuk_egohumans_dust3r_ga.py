@@ -110,13 +110,15 @@ def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = 
 
     # EgoHumans data
     # Fix batch size to 1 for now
-    selected_big_seq_list = ['07_tennis'] #['06_badminton']#['02_lego'] #['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
-    selected_small_seq_start_and_end_idx_tuple = (6,13) #(1, 20)
+    selected_big_seq_list = [] # ['07_tennis'] #['06_badminton']#['02_lego'] #['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
+    selected_small_seq_start_and_end_idx_tuple = (1, 20) # (6,13) 
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    num_of_cams = 4
+    num_of_cams = 10
     use_sam2_mask = False
-    subsample_rate = 50 #100
-    output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', '2024nov13_good_cams', f'num_of_cams{num_of_cams}')
+    subsample_rate = 100 # 50
+    # output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', '2024nov13_good_cams', f'num_of_cams{num_of_cams}')
+    output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', 'dust3r_raw_outputs_random_sampled_views', f'num_of_cams{num_of_cams}')
+
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
     dataset, dataloader = create_dataloader(egohumans_data_root, dust3r_raw_output_dir=dust3r_raw_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, use_sam2_mask=use_sam2_mask, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)

@@ -642,7 +642,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     scale_increasing_factor = 1.3 #1.3 #2 #1.3
     num_of_humans_for_optimization = None
     focal_break = 20 # default is 20 in dust3r code, lower the more focal length can change
-    # identified_vitpose_hmr2_hamer_output_dir = None # TEMP
+    identified_vitpose_hmr2_hamer_output_dir = None # TEMP
 
     # EgoHumans data
     # Fix batch size to 1 for now   
@@ -650,7 +650,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     selected_small_seq_start_and_end_idx_tuple = None if len(sel_small_seq_range) == 0 else sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
     # num_of_cams = 3
-    num_of_cams = 4
+    num_of_cams = 10
     subsample_rate = 100 # 50
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
     dust3r_ga_output_dir = osp.join(dust3r_ga_output_dir, f'num_of_cams{num_of_cams}')
@@ -1113,9 +1113,9 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
         total_output['hmr2_pred_humans_and_cameras'] = init_human_cam_data 
         total_output['our_optimized_human_names'] = sorted(list(human_params.keys()))[:num_of_humans_for_optimization]
 
-        print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
-        with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
-            pickle.dump(total_output, f)    
+        # print("Saving to ", osp.join(optim_output_dir, f'{output_name}.pkl'))
+        # with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
+        #     pickle.dump(total_output, f)    
         
         if vis:
             show_optimization_results(total_output['our_pred_world_cameras_and_structure'], human_params, smplx_layer_dict[1])

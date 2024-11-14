@@ -254,8 +254,11 @@ class EgoHumansDataset(Dataset):
                 # # TEMP
                 # if frame+1 not in TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['sel_small_seq_and_frames'][small_seq]:
                 #     continue
-                if  frame % self.subsample_rate != 0: # frame == 0
+                # TEMP
+                if frame != 0:
                     continue
+                # if  frame % self.subsample_rate != 0: # frame == 0
+                #     continue
 
                 per_frame_data = {
                     'sequence': small_seq,
@@ -306,9 +309,14 @@ class EgoHumansDataset(Dataset):
                                 selected_cameras = available_cameras
                             else:
                                 # TEMP
-                                # New camera sampling Nov 12th 2024
-                                selected_cam_idx_str_list = TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['selected_cam_names']
-                                selected_cameras = [f'cam{idx:02d}' for idx in selected_cam_idx_str_list]
+                                # Sampling that I (Hongsuk) used after Nov 6th 2024 - Nov 12th 2024
+                                # random sampling
+                                selected_cameras = random.sample(available_cameras, self.num_of_cams)
+                                selected_cameras.sort()
+
+                                # # New camera sampling Nov 12th 2024
+                                # selected_cam_idx_str_list = TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['selected_cam_names']
+                                # selected_cameras = [f'cam{idx:02d}' for idx in selected_cam_idx_str_list]
                                 # New camera sampling that I (Hongsuk) used after Nov 6th 2024
                                 # random sampling
                                 # selected_cameras = random.sample(available_cameras, self.num_of_cams)
@@ -884,7 +892,7 @@ class EgoHumansDataset(Dataset):
 
                     # SAVE the identified predictions
                     # self.vitpose_hmr2_hamer_output_dir,
-                    save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov12')
+                    save_root_dir = os.path.join('/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov13')
                     mono_multiple_human_sanitized_save_dir = os.path.join(save_root_dir, self.big_seq_name_dict[seq.split('_')[1]], seq, f'{camera_name}') #, 'identified_predictions')
                     Path(mono_multiple_human_sanitized_save_dir).mkdir(parents=True, exist_ok=True)
                     mono_multiple_human_sanitized_save_path = os.path.join(mono_multiple_human_sanitized_save_dir, f'__hongsuk_identified_vitpose_bbox_smplx_frame{frame+1:05d}.pkl')
