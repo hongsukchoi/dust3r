@@ -254,11 +254,8 @@ class EgoHumansDataset(Dataset):
                 # # TEMP
                 # if frame+1 not in TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['sel_small_seq_and_frames'][small_seq]:
                 #     continue
-                # TEMP
-                if frame != 0:
+                if  frame % self.subsample_rate != 0: 
                     continue
-                # if  frame % self.subsample_rate != 0: # frame == 0
-                #     continue
 
                 per_frame_data = {
                     'sequence': small_seq,
@@ -311,12 +308,12 @@ class EgoHumansDataset(Dataset):
                                 # TEMP
                                 # Sampling that I (Hongsuk) used after Nov 6th 2024 - Nov 12th 2024
                                 # random sampling
-                                selected_cameras = random.sample(available_cameras, self.num_of_cams)
-                                selected_cameras.sort()
+                                # selected_cameras = random.sample(available_cameras, self.num_of_cams)
+                                # selected_cameras.sort()
 
                                 # # New camera sampling Nov 12th 2024
-                                # selected_cam_idx_str_list = TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['selected_cam_names']
-                                # selected_cameras = [f'cam{idx:02d}' for idx in selected_cam_idx_str_list]
+                                selected_cam_idx_str_list = TEST_SET_DEPENDING_ON_NUM_OF_CAMS[self.num_of_cams][big_seq_name]['selected_cam_names']
+                                selected_cameras = [f'cam{idx:02d}' for idx in selected_cam_idx_str_list]
                                 # New camera sampling that I (Hongsuk) used after Nov 6th 2024
                                 # random sampling
                                 # selected_cameras = random.sample(available_cameras, self.num_of_cams)
@@ -878,7 +875,7 @@ class EgoHumansDataset(Dataset):
                                                                                     mono_multiple_human_2d_cam_pred_pose, multiple_human_3d_world_projected_annot_pose2d,
                                                                                     multiple_human_3d_world_projected_human_names, \
                                                                                     self.egohumans_image_size_tuple, \
-                                                                                    cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
+                                                                                    # cam_name = camera_name, img_path = sample['annot_and_img_paths'][camera_name]['img_path'] \
                                                                                     ) 
 
                     mono_pred_output_dict = {mono_pred_human_names[i]: # ex) 'aria01'
@@ -1437,14 +1434,14 @@ if __name__ == '__main__':
     # tennis 6,13
     # else all small sequences
     # selected_big_seq_list = ['01_tagging', '02_lego', '03_fencing', '04_basketball', '05_volleyball', '06_badminton', '07_tennis']
-    selected_big_seq_list = ['06_badminton'] 
-    selected_small_seq_start_and_end_idx_tuple = (1, 20)  
-    num_of_cams = 4
+    selected_big_seq_list = ['07_tennis'] 
+    selected_small_seq_start_and_end_idx_tuple = (6, 13)  
+    num_of_cams = 10
     data_root = '/home/hongsuk/projects/dust3r/data/egohumans_data'
     vitpose_hmr2_hamer_output_dir = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready' 
-    dust3r_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
+    dust3r_output_dir = f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/dust3r_raw_outputs_random_sampled_views/num_of_cams{num_of_cams}'# None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_raw_outputs/num_of_cams{num_of_cams}'
     dust3r_ga_output_dir = None # f'/home/hongsuk/projects/dust3r/outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/num_of_cams{num_of_cams}'
-    subsample_rate = 50 
+    subsample_rate = 100 
     human_detection_threshold = 0.5
     dataset, dataloader = create_dataloader(data_root, subsample_rate=subsample_rate, human_detection_threshold=human_detection_threshold, optimize_human=True, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, dust3r_raw_output_dir=dust3r_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, num_of_cams=num_of_cams, batch_size=1, split='test', num_workers=0, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
 

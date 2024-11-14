@@ -6,8 +6,8 @@
 ## %j is the job id, %u is the user id, %A is $SLURM_ARRAY_JOB_ID, %a is $SLURM_ARRAY_TASK_ID
 
 #SBATCH --job-name=egohumans          # Job name
-#SBATCH --error=/home/hongsuk/projects/dust3r/jobs/jobs6/%j_%t_%A_%a_log.err           # Error file
-#SBATCH --output=/home/hongsuk/projects/dust3r/jobs/jobs6/%j_%t_%A_%a_log.out         # Output file
+#SBATCH --error=/home/hongsuk/projects/dust3r/jobs/jobs4/%j_%t_%A_%a_log.err           # Error file
+#SBATCH --output=/home/hongsuk/projects/dust3r/jobs/jobs4/%j_%t_%A_%a_log.out         # Output file
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -16,7 +16,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --qos=low
 #SBATCH --array=0-86
-#SBATCH --comment="egohumans with gt focal"
+#SBATCH --comment="egohumans ablation no scene update"
 # #SBATCH --signal=B:CONT@5 
 
 ### Section 2: Setting environment variables for the job
@@ -85,9 +85,9 @@ fi
 # Check if use_gt_focal is True and construct command accordingly
 if [ $use_gt_focal = True ]; then
     echo "Using GroundTruth focal lengths"
-    cmd="CUDA_VISIBLE_DEVICES=0 python hongsuk_egohumans_align_dust3r_hmr2hamer.py --sel-big-seqs $big_seq --sel_small_seq_range $small_seq --use_gt_focal"
+    cmd="CUDA_VISIBLE_DEVICES=0 python hongsuk_egohumans_align_dust3r_hmr2hamer_nosceneupdate.py --sel-big-seqs $big_seq --sel_small_seq_range $small_seq --use_gt_focal"
 else
-    cmd="CUDA_VISIBLE_DEVICES=0 python hongsuk_egohumans_align_dust3r_hmr2hamer.py --sel-big-seqs $big_seq --sel_small_seq_range $small_seq"
+    cmd="CUDA_VISIBLE_DEVICES=0 python hongsuk_egohumans_align_dust3r_hmr2hamer_nosceneupdate.py --sel-big-seqs $big_seq --sel_small_seq_range $small_seq"
 fi
 
 # Execute the constructed command

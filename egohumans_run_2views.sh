@@ -6,8 +6,8 @@
 ## %j is the job id, %u is the user id, %A is $SLURM_ARRAY_JOB_ID, %a is $SLURM_ARRAY_TASK_ID
 
 #SBATCH --job-name=egohumans          # Job name
-#SBATCH --error=/home/hongsuk/projects/dust3r/jobs/jobs6/%j_%t_%A_%a_log.err           # Error file
-#SBATCH --output=/home/hongsuk/projects/dust3r/jobs/jobs6/%j_%t_%A_%a_log.out         # Output file
+#SBATCH --error=/home/hongsuk/projects/dust3r/jobs/jobs8/%j_%t_%A_%a_log.err           # Error file
+#SBATCH --output=/home/hongsuk/projects/dust3r/jobs/jobs8/%j_%t_%A_%a_log.out         # Output file
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -82,12 +82,16 @@ if [ "$HOSTNAME" = "em3" ]; then
     fi
 fi
 
+
+dust3r_raw_output_dir='./outputs/egohumans/dust3r_raw_outputs/2024nov14_good_cams'
+dust3r_ga_output_dir='./outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/2024nov14_good_cams'
+
 # Check if use_gt_focal is True and construct command accordingly
 if [ $use_gt_focal = True ]; then
     echo "Using GroundTruth focal lengths"
-    cmd="CUDA_VISIBLE_DEVICES=0 python hongsuk_egohumans_align_dust3r_hmr2hamer.py --sel-big-seqs $big_seq --sel_small_seq_range $small_seq --use_gt_focal"
+    cmd="CUDA_VISIBLE_DEVICES=0 python hongsuk_egohumans_align_dust3r_hmr2hamer.py --sel-big-seqs $big_seq --sel_small_seq_range $small_seq --use_gt_focal --dust3r_raw_output_dir $dust3r_raw_output_dir --dust3r_ga_output_dir $dust3r_ga_output_dir"
 else
-    cmd="CUDA_VISIBLE_DEVICES=0 python hongsuk_egohumans_align_dust3r_hmr2hamer.py --sel-big-seqs $big_seq --sel_small_seq_range $small_seq"
+    cmd="CUDA_VISIBLE_DEVICES=0 python hongsuk_egohumans_align_dust3r_hmr2hamer.py --sel-big-seqs $big_seq --sel_small_seq_range $small_seq --dust3r_raw_output_dir $dust3r_raw_output_dir --dust3r_ga_output_dir $dust3r_ga_output_dir"
 fi
 
 # Execute the constructed command

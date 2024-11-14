@@ -632,7 +632,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
 
     # Parameters I am tuning
     human_loss_weight = 5.0
-    stage2_start_idx_percentage = 0.2 # 0.5 #0.2
+    stage2_start_idx_percentage = 0.0 # 0.5 #0.2
     stage3_start_idx_percentage = 0.85 
     min_niter = 500
     niter = 300
@@ -642,7 +642,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     scale_increasing_factor = 1.3 #1.3 #2 #1.3
     num_of_humans_for_optimization = None
     focal_break = 20 # default is 20 in dust3r code, lower the more focal length can change
-    # identified_vitpose_hmr2_hamer_output_dir = None # TEMP
+    identified_vitpose_hmr2_hamer_output_dir = None # TEMP
 
     # EgoHumans data
     # Fix batch size to 1 for now   
@@ -665,7 +665,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     # else:
     #     optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, f'2024nov13_good_cams_ablation_scale100',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, f'2024nov13_good_cams_noalpha',  f'num_of_cams{num_of_cams}')
 
     print(f"Optimizing output directory: {optim_output_dir}")
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
@@ -874,14 +874,14 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             # Scale little bit larger to ensure humans are inside the views
             scene_scale = scene_scale * scale_increasing_factor
 
-            # print(f"Dust3r to Human original scale ratio: {scene_scale}")
-            # print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
-            # print(f"Rescaled Dust3r to Human scale ratio: {scene_scale}")
+            print(f"Dust3r to Human original scale ratio: {scene_scale}")
+            print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
+            print(f"Rescaled Dust3r to Human scale ratio: {scene_scale}")
 
-            # # do the optimization again with scaled 3D points and camera poses
-            # pts3d_scaled = [p * scene_scale for p in pts3d]
-            # pts3d = pts3d_scaled
-            # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+            # do the optimization again with scaled 3D points and camera poses
+            pts3d_scaled = [p * scene_scale for p in pts3d]
+            pts3d = pts3d_scaled
+            im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
 
         except:
             # print("Error in Procrustes alignment or distance ratio calculation due to zero division...")
@@ -893,27 +893,16 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             niter = max(int(niter_factor * scene_scale), min_niter)
             scene_scale = scene_scale * scale_increasing_factor
 
-            # # Switch dust3r camera poses to the hmr2 initialized camera poses
-            # for cam_name in sorted(list(human_inited_cam_poses.keys())):
-            #     im_poses[cam_names.index(cam_name)] = torch.from_numpy(human_inited_cam_poses[cam_name]).to(device)
+            # Switch dust3r camera poses to the hmr2 initialized camera poses
+            for cam_name in sorted(list(human_inited_cam_poses.keys())):
+                im_poses[cam_names.index(cam_name)] = torch.from_numpy(human_inited_cam_poses[cam_name]).to(device)
 
-            # # do the optimization again with scaled 3D points and camera poses
-            # # Is this meaningful? - Hongsuk
-            # pts3d_scaled = [p * scene_scale for p in pts3d]
-            # pts3d = pts3d_scaled
-            # # Don't scale the camera locations
-            # # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
-
-        print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
-
-        print("### Ablation on scale initialization ###")
-        scene_scale = 100.0
-        print(f"Dust3r to Human original scale ratio: {scene_scale}")
-
-        # do the optimization again with scaled 3D points and camera poses
-        pts3d_scaled = [p * scene_scale for p in pts3d]
-        pts3d = pts3d_scaled
-        im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+            # do the optimization again with scaled 3D points and camera poses
+            # Is this meaningful? - Hongsuk
+            pts3d_scaled = [p * scene_scale for p in pts3d]
+            pts3d = pts3d_scaled
+            # Don't scale the camera locations
+            # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
 
         # define the scene class that will be optimized
         scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, focal_break=focal_break, has_human_cue=False)
@@ -983,10 +972,10 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
         with tqdm.tqdm(total=niter) as bar:
             while bar.n < bar.total:
                 # Set optimizer
-                if bar.n == stage1_iter[0]:
+                if len(stage1_iter) > 0 and bar.n == stage1_iter[0]:
                     optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 1, lr)
                     print("\n1st stage optimization starts at ", bar.n)
-                elif bar.n == stage2_iter[0]:
+                elif len(stage2_iter) > 0 and bar.n == stage2_iter[0]:
                     human_loss_weight = 10.
                     lr_base = lr = 0.01
                     optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 2, lr)
@@ -1019,7 +1008,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
                         world_env = parse_to_save_data(scene, cam_names)
                         show_optimization_results(world_env, human_params, smplx_layer_dict[1])
 
-                elif bar.n == stage3_iter[0]:
+                elif len(stage3_iter) > 0 and bar.n == stage3_iter[0]:
                     human_loss_weight = 5.
 
                     optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 3, lr)
@@ -1054,7 +1043,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
                 else:
                     multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
                     multiview_intrinsics = scene.get_intrinsics() # (len(cam_names), 3, 3)
-
+                    
                 # Initialize losses dictionary
                 losses = {}
 

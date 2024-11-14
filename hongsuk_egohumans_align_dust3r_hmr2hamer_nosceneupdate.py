@@ -665,7 +665,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     # else:
     #     optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, f'2024nov13_good_cams_ablation_scale100',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, f'2024nov14_good_cams_ablation_no_scene_update_focal_fixed',  f'num_of_cams{num_of_cams}')
 
     print(f"Optimizing output directory: {optim_output_dir}")
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
@@ -874,14 +874,14 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             # Scale little bit larger to ensure humans are inside the views
             scene_scale = scene_scale * scale_increasing_factor
 
-            # print(f"Dust3r to Human original scale ratio: {scene_scale}")
-            # print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
-            # print(f"Rescaled Dust3r to Human scale ratio: {scene_scale}")
+            print(f"Dust3r to Human original scale ratio: {scene_scale}")
+            print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
+            print(f"Rescaled Dust3r to Human scale ratio: {scene_scale}")
 
-            # # do the optimization again with scaled 3D points and camera poses
-            # pts3d_scaled = [p * scene_scale for p in pts3d]
-            # pts3d = pts3d_scaled
-            # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+            # do the optimization again with scaled 3D points and camera poses
+            pts3d_scaled = [p * scene_scale for p in pts3d]
+            pts3d = pts3d_scaled
+            im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
 
         except:
             # print("Error in Procrustes alignment or distance ratio calculation due to zero division...")
@@ -893,27 +893,16 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             niter = max(int(niter_factor * scene_scale), min_niter)
             scene_scale = scene_scale * scale_increasing_factor
 
-            # # Switch dust3r camera poses to the hmr2 initialized camera poses
-            # for cam_name in sorted(list(human_inited_cam_poses.keys())):
-            #     im_poses[cam_names.index(cam_name)] = torch.from_numpy(human_inited_cam_poses[cam_name]).to(device)
+            # Switch dust3r camera poses to the hmr2 initialized camera poses
+            for cam_name in sorted(list(human_inited_cam_poses.keys())):
+                im_poses[cam_names.index(cam_name)] = torch.from_numpy(human_inited_cam_poses[cam_name]).to(device)
 
-            # # do the optimization again with scaled 3D points and camera poses
-            # # Is this meaningful? - Hongsuk
-            # pts3d_scaled = [p * scene_scale for p in pts3d]
-            # pts3d = pts3d_scaled
-            # # Don't scale the camera locations
-            # # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
-
-        print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
-
-        print("### Ablation on scale initialization ###")
-        scene_scale = 100.0
-        print(f"Dust3r to Human original scale ratio: {scene_scale}")
-
-        # do the optimization again with scaled 3D points and camera poses
-        pts3d_scaled = [p * scene_scale for p in pts3d]
-        pts3d = pts3d_scaled
-        im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+            # do the optimization again with scaled 3D points and camera poses
+            # Is this meaningful? - Hongsuk
+            pts3d_scaled = [p * scene_scale for p in pts3d]
+            pts3d = pts3d_scaled
+            # Don't scale the camera locations
+            # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
 
         # define the scene class that will be optimized
         scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, focal_break=focal_break, has_human_cue=False)
@@ -935,6 +924,10 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
                 print("Known params init")
             else:
                 raise ValueError(f"Unknown initialization method: {init}")
+            
+        # Pop up the point maps and focal length
+        # scene.im_depthmaps.requires_grad = False
+        # scene.im_focals.requires_grad = False
         scene_params = [p for p in scene.parameters() if p.requires_grad]
 
         # Visualize the initilization of 3D human and 3D world
@@ -1001,7 +994,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
                     pts3d_scaled = [p * residual_scene_scale.item() for p in pts3d]
                     scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=pts3d_scaled, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
                     print("Known params init")
-                    
+
                     init_cam_centers = scene.get_im_poses()[:, :3, 3].detach()  # (N, 3)
         
                     # Compute distances between all pairs of cameras
@@ -1067,11 +1060,11 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
                 losses['human_loss'] = human_loss_weight * losses['human_loss']
                 human_loss_timer.toc()
 
-                if num_of_cams > 2 and (bar.n in stage2_iter or bar.n in stage3_iter):
-                    # Get scene loss
-                    scene_loss_timer.tic()
-                    losses['scene_loss'] = scene.dust3r_loss()
-                    scene_loss_timer.toc()
+                # if num_of_cams > 2 and (bar.n in stage2_iter or bar.n in stage3_iter):
+                #     # Get scene loss
+                #     scene_loss_timer.tic()
+                #     losses['scene_loss'] = scene.dust3r_loss()
+                #     scene_loss_timer.toc()
 
                     # TEMP
                     # # Camera pose regularization (commented out but preserved)
@@ -1117,6 +1110,13 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
         print("Final losses:", ' '.join([f'{k}={v.item():g}' for k, v in losses.items()]))
         print(f"Time taken: human_loss={human_loss_timer.total_time:g}s, scene_loss={scene_loss_timer.total_time:g}s, backward={gradient_timer.total_time:g}s")
 
+        # Update the scene parameters (among them only the pointcloud is actually updated)
+        scene_intrinsics = scene.get_intrinsics().detach().cpu().numpy()
+        im_focals = [intrinsic[0,0] for intrinsic in scene_intrinsics]
+        im_poses = scene.get_im_poses().detach()
+        scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=None, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+        print("Updated the pointcloud according to the optimized camera parameters")
+                
         # Save output
         total_output = {}
         total_output['gt_world_cameras'] = world_gt_cameras

@@ -15,8 +15,6 @@ import time
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scipy.spatial.transform import Rotation as R
-
 from pathlib import Path
 from collections import defaultdict
 
@@ -59,14 +57,6 @@ def convert_human_params_to_numpy(human_params):
 
     return human_params_np
 
-def get_resume_info(results, device='cuda'):
-    cam_names = sorted(list(results.keys()))
-    pts3d = [torch.from_numpy(results[img_name]['pts3d']).to(device) for img_name in cam_names]
-    im_focals = [results[img_name]['intrinsic'][0][0] for img_name in cam_names]
-    im_poses = [torch.from_numpy(results[img_name]['cam2world']).to(device) for img_name in cam_names]
-    im_poses = torch.stack(im_poses)
-
-    return pts3d, im_focals, im_poses, cam_names
 
 def draw_joints2d(joints2d, img_paths, output_dir, conf_threshold=0.2):
     # Draw joints2d on each image with index labels
@@ -200,7 +190,7 @@ def parse_to_save_data(scene, cam_names, main_cam_idx=None):
     return results
 
 # initialize human parameters to be optimized == nn.Parameters
-def init_human_params_v0(human_params, device):
+def init_human_params(human_params, device):
     optim_target_dict = {} # human_name: str -> Dict[param_name: str -> nn.Parameter]
     for human_name, human_params in human_params.items():
         optim_target_dict[human_name] = {}
@@ -213,221 +203,8 @@ def init_human_params_v0(human_params, device):
         optim_target_dict[human_name]['right_hand_pose'] = nn.Parameter(human_params['right_hand_pose'].float().to(device))  # (1, 45)
         optim_target_dict[human_name]['transl'] = nn.Parameter(human_params['transl'].float().to(device)) # (1, 3)
 
+
     return optim_target_dict
-
-def estimate_initial_trans(joints3d, joints2d, focal, princpt, skeleton):
-    """
-    use focal length and bone lengths to approximate distance from camera
-    joints3d: (J, 3), xyz in meters
-    joints2d: (J, 2+1), xy pixels + confidence
-    focal: scalar
-    princpt: (2,), x, y
-    skeleton: list of edges (bones)
-
-    returns:
-        init_trans: (3,), x, y, z in meters, translation vector of the pelvis (root) joint
-    """
-    # Calculate bone lengths and confidence for each bone
-    bone3d_array = []  # 3D bone lengths in meters
-    bone2d_array = []  # 2D bone lengths in pixels
-    conf2d = []        # Confidence scores for each bone
-
-    for edge in skeleton:
-        # 3D bone length
-        joint1_3d = joints3d[edge[0]]
-        joint2_3d = joints3d[edge[1]]
-        bone_length_3d = np.linalg.norm(joint1_3d - joint2_3d)
-        bone3d_array.append(bone_length_3d)
-
-        # 2D bone length
-        joint1_2d = joints2d[edge[0], :2]  # xy coordinates
-        joint2_2d = joints2d[edge[1], :2]  # xy coordinates
-        bone_length_2d = np.linalg.norm(joint1_2d - joint2_2d)
-        bone2d_array.append(bone_length_2d)
-
-        # Confidence score for this bone (minimum of both joint confidences)
-        bone_conf = min(joints2d[edge[0], 2], joints2d[edge[1], 2])
-        conf2d.append(bone_conf)
-
-    # Convert to numpy arrays
-    bone3d_array = np.array(bone3d_array)
-    bone2d_array = np.array(bone2d_array)
-    conf2d = np.array(conf2d)
-
-    mean_bone3d = np.mean(bone3d_array, axis=0)
-    mean_bone2d = np.mean(bone2d_array * (conf2d > 0.0), axis=0)
-
-    # Estimate z using the ratio of 3D to 2D bone lengths
-    # z = f * (L3d / L2d) where f is focal length
-    z = mean_bone3d / mean_bone2d * focal
-    
-    # Find pelvis (root) joint position in 2D
-    pelvis_2d = joints2d[0, :2]  # Assuming pelvis is the first joint
-
-    # Back-project 2D pelvis position to 3D using estimated z
-    x = (pelvis_2d[0] - princpt[0]) * z / focal
-    y = (pelvis_2d[1] - princpt[1]) * z / focal
-
-    init_trans = np.array([x, y, z])
-    return init_trans
-
-def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_multiperson_pose2d, focal_length, princpt, device = 'cuda', get_vertices=False):
-    # multiview_multiple_human_cam_pred: Dict[camera_name -> Dict[human_name -> 'pose2d', 'bbox', 'params' Dicts]]
-    # multiview_multiperson_pose2d: Dict[human_name -> Dict[cam_name -> (J, 2+1)]] torch tensor
-    # focal_length: scalar, princpt: (2,), device: str
-
-    # Initialize Stage 1: Get the 3D root translation of all humans from all cameras
-    # Decode the smplx mesh and get the 3D bone lengths / compare them with the bone lengths from the vitpose 2D bone lengths
-    camera_names = sorted(list(multiview_multiple_human_cam_pred.keys()))
-    first_cam = camera_names[0]
-    first_cam_human_name_counts = {human_name: {'count': 0, 'pose2d_conf': 0} for human_name in sorted(list(multiview_multiple_human_cam_pred[first_cam].keys()))}
-    missing_human_names_in_first_cam = defaultdict(list)
-    multiview_multiperson_init_trans = defaultdict(dict) # Dict[human_name -> Dict[cam_name -> (3)]]
-    for cam_name in camera_names:
-        for human_name in sorted(list(multiview_multiple_human_cam_pred[cam_name].keys())):
-            params = multiview_multiple_human_cam_pred[cam_name][human_name]['params']
-            body_pose = params['body_pose'].reshape(1, -1).to(device)
-            global_orient = params['global_orient'].reshape(1, -1).to(device)
-            betas = params['betas'].reshape(1, -1).to(device)
-            left_hand_pose = params['left_hand_pose'].reshape(1, -1).to(device)
-            right_hand_pose = params['right_hand_pose'].reshape(1, -1).to(device)
-            transl = params['transl'].reshape(1, -1).to(device)
-            
-            smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose, transl=transl)
-
-            # Extract main body joints and visualize 3D skeleton from SMPL-X
-            smplx_joints = smplx_output['joints']
-            # Save the root joint (pelvis) translation for later compensation
-            params['org_cam_root_transl'] = smplx_joints[0, 0,:3].detach().cpu().numpy()
-
-            smplx_coco_main_body_joints = smplx_joints[0, smplx_main_body_joint_idx, :].detach().cpu().numpy()
-            vitpose_2d_keypoints = multiview_multiperson_pose2d[human_name][cam_name][coco_main_body_joint_idx].cpu().numpy() # (J, 2+1)
-            init_trans = estimate_initial_trans(smplx_coco_main_body_joints, vitpose_2d_keypoints, focal_length, princpt, COCO_MAIN_BODY_SKELETON)
-            # How to use init_trans?
-            # vertices = vertices - joints[0:1] + init_trans # !ALWAYS! Fuck the params['transl']
-            if human_name in sorted(list(first_cam_human_name_counts.keys())):
-                first_cam_human_name_counts[human_name]['count'] += 1
-                first_cam_human_name_counts[human_name]['pose2d_conf'] = sum(vitpose_2d_keypoints[:, 2])
-            else:
-                missing_human_names_in_first_cam[human_name].append(cam_name)
-            multiview_multiperson_init_trans[human_name][cam_name] = init_trans
-
-    # main human is the one that is detected in the first camera and has the most detections across all cameras
-    main_human_name_candidates = []
-    max_count = 0
-    for human_name, count_dict in first_cam_human_name_counts.items():
-        if count_dict['count'] == len(camera_names):
-            main_human_name_candidates.append(human_name)
-            max_count = len(camera_names)
-        elif count_dict['count'] > max_count:
-            max_count = count_dict['count']
-            main_human_name_candidates.append(human_name)
-    
-    if max_count != len(camera_names):
-        print(f"Warning: {main_human_name_candidates} are the most detected main human but not detected in all cameras")
-
-    # First filter to only keep humans with the maximum count
-    max_count_humans = []
-    for human_name in main_human_name_candidates:
-        if first_cam_human_name_counts[human_name]['count'] == max_count:
-            max_count_humans.append(human_name)
-    
-    # Among those with max count, pick the one with highest confidence
-    main_human_name = None
-    max_conf = 0
-    for human_name in max_count_humans:
-        conf = first_cam_human_name_counts[human_name]['pose2d_conf']
-        if conf > max_conf:
-            max_conf = conf
-            main_human_name = human_name
-    
-    # Initialize Stage 2: Get the initial camera poses with respect to the first camera
-    global_orient_first_cam = multiview_multiple_human_cam_pred[first_cam][main_human_name]['params']['global_orient'][0].cpu().numpy()
-    # axis angle to rotation matrix
-    global_orient_first_cam = R.from_rotvec(global_orient_first_cam).as_matrix().astype(np.float32)
-    init_trans_first_cam = multiview_multiperson_init_trans[main_human_name][first_cam]
-
-    # First camera (world coordinate) pose
-    world_T_first = np.eye(4, dtype=np.float32)  # Identity rotation and zero translation
-
-    # Calculate other camera poses relative to world (first camera)
-    cam_poses = {first_cam: world_T_first}  # Store all camera poses
-    for cam_name in sorted(list(multiview_multiperson_init_trans[main_human_name].keys())):
-        if cam_name == first_cam:
-            continue
-        
-        # Get human orientation and position in other camera
-        global_orient_other_cam = multiview_multiple_human_cam_pred[cam_name][main_human_name]['params']['global_orient'][0].cpu().numpy()
-        global_orient_other_cam = R.from_rotvec(global_orient_other_cam).as_matrix().astype(np.float32)
-        init_trans_other_cam = multiview_multiperson_init_trans[main_human_name][cam_name]
-
-        # The human's orientation should be the same in world coordinates
-        # Therefore: R_other @ global_orient_other = R_first @ global_orient_first
-        # Solve for R_other: R_other = (R_first @ global_orient_first) @ global_orient_other.T
-        R_other = global_orient_first_cam @ global_orient_other_cam.T
-
-        # For translation: The human position in world coordinates should be the same when viewed from any camera
-        # world_p = R_first @ p_first + t_first = R_other @ p_other + t_other
-        # Since R_first = I and t_first = 0:
-        # p_first = R_other @ p_other + t_other
-        # Solve for t_other: t_other = p_first - R_other @ p_other
-        t_other = init_trans_first_cam - R_other @ init_trans_other_cam
-
-        # Create 4x4 transformation matrix
-        T_other = np.eye(4, dtype=np.float32)
-        T_other[:3, :3] = R_other
-        T_other[:3, 3] = t_other
-
-        cam_poses[cam_name] = T_other
-
-    # Visualize the camera poses (cam to world (first cam))
-    # visualize_cameras(cam_poses)
-
-    # Now cam_poses contains all camera poses in world coordinates
-    # The poses can be used to initialize the scene
-
-    # Organize the data for optimization
-    # Get the first cam human parameters with the initial translation
-    first_cam_human_params = {}
-    for human_name in sorted(list(multiview_multiple_human_cam_pred[first_cam].keys())):
-        first_cam_human_params[human_name] = multiview_multiple_human_cam_pred[first_cam][human_name]['params']
-        first_cam_human_params[human_name]['root_transl'] = torch.from_numpy(multiview_multiperson_init_trans[human_name][first_cam]).reshape(1, -1).to(device)
-
-    # Visualize the first cam human parameters with the camera poses
-    # decode the human parameters to 3D vertices and visualize
-    if get_vertices:
-        first_cam_human_vertices = {}
-        for human_name, human_params in first_cam_human_params.items():
-            body_pose = human_params['body_pose'].reshape(1, -1).to(device)
-            global_orient = human_params['global_orient'].reshape(1, -1).to(device)
-            betas = human_params['betas'].reshape(1, -1).to(device)
-            left_hand_pose = human_params['left_hand_pose'].reshape(1, -1).to(device)
-            right_hand_pose = human_params['right_hand_pose'].reshape(1, -1).to(device)
-            transl = human_params['transl'].reshape(1, -1).to(device)
-
-            smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose, transl=transl)
-
-            vertices = smplx_output.vertices[0].detach().cpu().numpy()
-            joints = smplx_output.joints[0].detach().cpu().numpy()
-            vertices = vertices - joints[0:1] + human_params['root_transl'].cpu().numpy()
-            first_cam_human_vertices[human_name] = vertices
-            # visualize_cameras_and_human(cam_poses, human_vertices=first_cam_human_vertices, smplx_faces=smplx_layer.faces)
-    else:
-        first_cam_human_vertices = None
-
-    optim_target_dict = {} # human_name: str -> Dict[param_name: str -> nn.Parameter]
-    for human_name, human_params in first_cam_human_params.items():
-        optim_target_dict[human_name] = {}
-        
-        # Convert human parameters to nn.Parameters for optimization
-        optim_target_dict[human_name]['body_pose'] = nn.Parameter(human_params['body_pose'].float().to(device))  # (1, 63)
-        optim_target_dict[human_name]['global_orient'] = nn.Parameter(human_params['global_orient'].float().to(device))  # (1, 3) 
-        optim_target_dict[human_name]['betas'] = nn.Parameter(human_params['betas'].float().to(device))  # (1, 10)
-        optim_target_dict[human_name]['left_hand_pose'] = nn.Parameter(human_params['left_hand_pose'].float().to(device))  # (1, 45)
-        optim_target_dict[human_name]['right_hand_pose'] = nn.Parameter(human_params['right_hand_pose'].float().to(device))  # (1, 45)
-        optim_target_dict[human_name]['root_transl'] = nn.Parameter(human_params['root_transl'].float().to(device)) # (1, 3)
-
-    return optim_target_dict, cam_poses, first_cam_human_vertices
 
 def get_stage_optimizer(human_params, scene_params, residual_scene_scale, stage: int, lr: float = 0.01):
     # 1st stage; optimize the scene scale, human root translation, shape (beta), and global orientation parameters
@@ -676,11 +453,20 @@ def show_ground_truth_scene(ground_truth, scene_point_size=0.006, point_shape='c
     import pdb; pdb.set_trace()
     print("Done visualizing")
 
-def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl', dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl', vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'):    
-    # dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl'
-    # dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl'
-    # vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'
+def main(output_dir: str = './outputs/egoexo/nov12/sota_comparison_trial1', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path: str = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl', vitpose_and_gt_path: str = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'):
+    # Pipeline
+    # 1) dust3r_network_output from /scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images
+    # 2) im_focals (K), im_poses (T) from /scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/results/prefit.pkl, ['cam']['K'], ['cam']['T']
+    # 3) load human parameter from /scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/results/prefit.pkl, ['human']
+    # 4) load ViTPose and byte track results from /scratch/partial_datasets/egoexo4d_v2/processed_20240718/takes/utokyo_cpr_2005_34_2/preprocessing/cam0*__vitpose.pkl
+    # 5) Final optimization
+    # dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/utokyo_cpr_2005_34_2/preprocessing/dust3r_world_env_2/000384/images/dust3r_network_output_pointmaps_images.pkl'
+    # prefit_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/results/prefit.pkl'
+    # vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_04/train/utokyo_cpr_2005_34_2/384/input_data.pkl'
     
+    dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl'
+    dust3r_ga_output_dir = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl'
+    vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'
     
     sequence_name = dust3r_network_output_path.split('/')[6]  #'utokyo_cpr_2005_34_2'
     frame_idx = int(dust3r_network_output_path.split('/')[-3]) #384 # for testing
@@ -698,7 +484,7 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
     stage2_start_idx_percentage = 0.2 #0.0 # 0.5 #0.2
     stage3_start_idx_percentage = 0.8 #0.9 
     min_niter = 500
-    niter = 10 #300
+    niter = 300
     niter_factor = 15 #20 ##10 # niter = int(niter_factor * scene_scale)
     lr = 0.015
     dist_tol = 0.3
@@ -720,7 +506,7 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
     norm_pw_scale = False
 
 
-    """ Get dust3r network output and global alignment results """
+    # 1) dust3r_network_output
     with open(dust3r_network_output_path, 'rb') as f:
         dust3r_network_output_dict = pickle.load(f)
     cam_names = dust3r_network_output_dict['img_names']
@@ -738,25 +524,62 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
         inv_affine_matrix = inv_affine_matrix[:2]
         inv_affine_matrices.append(inv_affine_matrix)
 
-    # load the precomputed 3D points, camera poses, and intrinsics from Dust3r GA output
-    with open(dust3r_ga_output_path, 'rb') as f:
-        dust3r_ga_output = pickle.load(f)
-    pts3d, im_focals, im_poses, cam_names = get_resume_info(dust3r_ga_output, device)
-
-    # intrinsics for human translation initialization
-    init_focal_length = im_focals[0] #scene.get_intrinsics()[0][0].detach().cpu().numpy()
-    init_princpt = [256., 144.] #scene.get_intrinsics()[0][:2, 2].detach().cpu().numpy()
-
-
-    """ Initialize the human and sceneparameters """
-
+    
+    # 2) im_focals (K), im_poses (T)
     with open(vitpose_and_gt_path, 'rb') as f:
         vitpose_and_gt_dict = pickle.load(f)
     # show_ground_truth_scene(vitpose_and_gt_dict)
 
-    # Scale initialization
-    scene_scale = vitpose_and_gt_dict['alpha']
+    # with open(prefit_path, 'rb') as f:
+    #     prefit = pickle.load(f)
+    # adjust the niter according to the scene scale
+    scene_scale = vitpose_and_gt_dict['alpha'].cpu().numpy()  #prefit['cam']['alpha']
+    niter = max(int(niter_factor * scene_scale), min_niter)
+    scene_scale = scene_scale * scale_increasing_factor
+    print(f"Adjusted niter to {niter} according to the scene scale {scene_scale} * {niter_factor}")
+
+    im_intrinsics = vitpose_and_gt_dict['K'].cpu().numpy() # these are original image space intrinsics #prefit['cam']['K'] # (N, 3, 3)
+    im_poses = vitpose_and_gt_dict['T'].cpu().numpy() # these are dust3r extrinsics #prefit['cam']['T'] # (N, 4, 4)
+
+    # Apply scene scale to the extrinsics
     im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+
+    # Apply inverse affine matrices to intrinsics
+    # For each camera, multiply the intrinsic matrix by the inverse affine matrix
+    # This inv affine matrix transforms the intrinsics from the original image space to the dust3r resized space
+    transformed_intrinsics = []
+    for i, (K, inv_affine) in enumerate(zip(im_intrinsics, inv_affine_matrices)):
+        # Convert inv_affine to 3x3 by adding [0,0,1] row
+        inv_affine_3x3 = np.vstack([inv_affine, [0, 0, 1]])
+        # Transform intrinsics: K_orig = inv(A) * K
+        # Where A is the affine transform from original to dust3r space
+        K_transformed = inv_affine_3x3 @ K
+        transformed_intrinsics.append(K_transformed)    
+    # Update im_intrinsics with transformed values
+    im_intrinsics = transformed_intrinsics
+
+    # # TEMP; JUST FOR SAKE OF SAVING
+    # im_poses_tmp = im_poses.copy()
+    # im_poses_tmp[:, :3, 3] = im_poses_tmp[:, :3, 3] / scene_scale
+    # im_intrinsics_tmp = im_intrinsics.copy()
+    # # Initialize the scene optimizer
+    # scene_tmp = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, focal_break=focal_break, has_human_cue=False)
+    # scene_tmp.norm_pw_scale = norm_pw_scale
+
+    # # initialize the scene parameters with the known poses or point clouds
+    # num_of_cams = len(cam_names)
+    # if num_of_cams >= 2:
+    #     if init == 'known_params_hongsuk':
+    #         # im_focals: np.array to list of scalars
+    #         im_focals_tmp = [im_intrinsics_tmp[i][0][0] for i in range(len(cam_names))]
+    #         # im_poses: numpy to torch
+    #         im_poses_tmp = [torch.from_numpy(im_poses_tmp[i]).to(device) for i in range(len(cam_names))]
+    #         im_poses_tmp = torch.stack(im_poses_tmp)
+            
+    #         init_loss = scene_tmp.init_from_known_params_hongsuk(im_focals=im_focals_tmp, im_poses=im_poses_tmp, pts3d=None, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+
+    # to_save_no_scale_dust3r_ga_output = parse_to_save_data(scene_tmp, cam_names)
+    # # TEMP; JUST FOR SAKE OF SAVING
 
     # Initialize the scene optimizer
     scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, focal_break=focal_break, has_human_cue=False)
@@ -766,8 +589,26 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
     num_of_cams = len(cam_names)
     if num_of_cams >= 2:
         if init == 'known_params_hongsuk':
+            # im_focals: np.array to list of scalars
+            im_focals = [im_intrinsics[i][0][0] for i in range(len(cam_names))]
+            # im_poses: numpy to torch
+            im_poses = [torch.from_numpy(im_poses[i]).to(device) for i in range(len(cam_names))]
+            im_poses = torch.stack(im_poses)
+            
             init_loss = scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=None, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
             
+            # TEMP
+            if init_loss < 1:
+                lr = lr * 0.1
+                lr_base = lr
+                lr_min = lr * 0.01
+                print(f"Adjusted lr to {lr} because the init loss {init_loss:.3f} is low")
+
+            # # TEMP; use gt focal lengthes and affine transform (divide by 7.5) and make it fixed
+            # im_focals = [world_gt_cameras[cam_name]['K'][0] / 7.5 for cam_name in cam_names]
+            # scene.preset_focal(im_focals, msk=None)
+            # scene.im_focals.requires_grad = False
+
             print("Known params init")
         else:
             raise ValueError(f"Unknown initialization method: {init}")
@@ -824,7 +665,20 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
 
     multiview_multiperson_poses2d = {'aria01': {}}
     multiview_multiperson_bboxes = {'aria01': {}}
-
+    # for vitpose_path, bytetrack_path in zip(vitpose_paths, bytetrack_paths):
+    #     with open(vitpose_path, 'rb') as f:
+    #         # TEMP; hardcoded for aria01
+    #         pose2d = pickle.load(f)[frame_idx][0] # (1, J, 3) -> (J, 3)
+    #         multiview_multiperson_poses2d['aria01'][osp.basename(vitpose_path).split('__vitpose')[0]] = torch.from_numpy(pose2d).to(device)
+    #     with open(bytetrack_path, 'rb') as f:
+    #         # TEMP; hardcoded for aria01
+    #         bbox = pickle.load(f)[frame_idx][0] # (1, 5) -> (5)
+    #         multiview_multiperson_bboxes['aria01'][osp.basename(bytetrack_path).split('__bbox_with_score_used')[0]] = torch.from_numpy(bbox).to(device)
+    
+    # load vitpose from cleaned data; and also load the ground truth joints2d
+    # with open(vitpose_and_gt_path, 'rb') as f:
+    #     vitpose_and_gt_dict = pickle.load(f)
+    # import pdb; pdb.set_trace()
     vitposeplus_2d_keypoints = vitpose_and_gt_dict['keypoints'] # (1, num_cams, 1, 135, 3)
     vitposeplus_2d_keypoints = vitposeplus_2d_keypoints[0, :, 0].numpy() # (num_cams, 135, 3)
     # change the joint order
@@ -868,10 +722,10 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
     print(">>> Set the scene scale as a parameter to optimize")
     residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
 
-    human_params = init_human_params_v0(human_params, device)
-
+    human_params = init_human_params(human_params, device)
     init_human_cam_data = {
         'human_params': copy.deepcopy(human_params),
+        # 'human_inited_cam_poses': copy.deepcopy(human_inited_cam_poses),
     }
     if num_of_humans_for_optimization is None:
         num_of_humans_for_optimization = len(human_params)
@@ -881,6 +735,7 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
         print(f"Optimizing {num_of_humans_for_optimization} humans")
         print(f"Names of humans to optimize: {sorted(list(human_params.keys()))[:num_of_humans_for_optimization]}")
 
+
     # Given the number of iterations, run the optimizer while forwarding the scene with the current parameters to get the loss
     with tqdm.tqdm(total=niter) as bar:
         while bar.n < bar.total:
@@ -889,9 +744,10 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
                 optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 1, lr)
                 print("\n1st stage optimization starts at ", bar.n)
             elif len(stage2_iter) > 0 and bar.n == stage2_iter[0]:
-                human_loss_weight = 10.
-                # human_loss_weight = 1.
-                lr_base = lr = 0.01
+                # human_loss_weight = 10.
+                human_loss_weight = 1.
+                # TEMP
+                # lr_base = lr = 0.01
                 optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 2, lr)
                 print("\n2nd stage optimization starts at ", bar.n)
                 # Reinitialize the scene
@@ -939,13 +795,9 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
                     multiview_cam2world_3by4,
                     multiview_cam2world_4by4[:, 3:4, :]
                 ], dim=1)
-                # What originally I was doing. even for stage 2 and 3
-                multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
-                multiview_intrinsics = scene.get_intrinsics().detach() # (len(cam_names), 3, 3)
 
-            else:
-                multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
-                multiview_intrinsics = scene.get_intrinsics() # (len(cam_names), 3, 3)
+            multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
+            multiview_intrinsics = scene.get_intrinsics().detach() # (len(cam_names), 3, 3)
 
             # Initialize losses dictionary
             losses = {}
@@ -1000,13 +852,10 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
 
     # Save output
     total_output = {}
-    # From Lea; save all key values where key includes 'gt'
-    gt_keys = [k for k in vitpose_and_gt_dict.keys() if 'gt' in k]
-    for k in gt_keys:
-        if type(vitpose_and_gt_dict[k]) is torch.Tensor:
-            total_output[k] = vitpose_and_gt_dict[k].cpu().numpy()
-        else:
-            total_output[k] = vitpose_and_gt_dict[k]
+    # From Lea
+    total_output['gt_scene_xyz'] = vitpose_and_gt_dict['gt_scene_xyz'].cpu().numpy()
+    total_output['gt_cam_T'] = vitpose_and_gt_dict['gt_cam_T'].cpu().numpy()
+    total_output['gt_cam_K'] = vitpose_and_gt_dict['gt_cam_K'].cpu().numpy()
     # From Hongsuk
     total_output['our_pred_world_cameras_and_structure'] = parse_to_save_data(scene, cam_names)
     total_output['our_pred_humans_smplx_params'] = convert_human_params_to_numpy(human_params)

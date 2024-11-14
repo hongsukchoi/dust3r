@@ -105,7 +105,7 @@ def parse_to_save_data(scene, cam_names, main_cam_idx=None):
         }
     return results
 
-def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov13_good_cams', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov14_good_cams', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # EgoHumans data
@@ -113,11 +113,12 @@ def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = 
     selected_big_seq_list = [] # ['07_tennis'] #['06_badminton']#['02_lego'] #['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
     selected_small_seq_start_and_end_idx_tuple = (1, 20) # (6,13) 
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    num_of_cams = 10
+    num_of_cams = 2
     use_sam2_mask = False
     subsample_rate = 100 # 50
     # output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', '2024nov13_good_cams', f'num_of_cams{num_of_cams}')
-    output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', 'dust3r_raw_outputs_random_sampled_views', f'num_of_cams{num_of_cams}')
+    # output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', 'dust3r_raw_outputs_random_sampled_views', f'num_of_cams{num_of_cams}')
+    output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', '2024nov14_good_cams', f'num_of_cams{num_of_cams}')
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')

@@ -57,7 +57,7 @@ conda activate dust3r
 ### Run your job.
 # ## Uses ls /home/achleshwar/amazon_iccv21/meshrcnn/output/ > all_asins_with_3dmodel.txt
 # ## python llib/methods/multiview_optimization/launch_main_mvopti.py
-IFS=$'\r\n' GLOBIGNORE='*' command eval  'PREFIXES=($(cat ./slurm_gt_focal.txt))' # 66
+IFS=$'\r\n' GLOBIGNORE='*' command eval  'PREFIXES=($(cat ./egohumans_slurm_pred_focal.txt))' # 66
 
 
 vid_uid=${PREFIXES[$SLURM_ARRAY_TASK_ID]}

@@ -1047,9 +1047,13 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
                         multiview_cam2world_3by4,
                         multiview_cam2world_4by4[:, 3:4, :]
                     ], dim=1)
+                    # What originally I was doing. even for stage 2 and 3
+                    multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
+                    multiview_intrinsics = scene.get_intrinsics().detach() # (len(cam_names), 3, 3)
 
-                multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
-                multiview_intrinsics = scene.get_intrinsics().detach() # (len(cam_names), 3, 3)
+                else:
+                    multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
+                    multiview_intrinsics = scene.get_intrinsics() # (len(cam_names), 3, 3)
 
                 # Initialize losses dictionary
                 losses = {}
