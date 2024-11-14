@@ -1,10 +1,65 @@
-# Quick README Nov 12th 2024
+# Quick README Nov 13th 2024
 
+**EgoHumans commands**
+
+Step 1. Run DUSt3R network inference on EgoHumans images. To control the number of cameras, you can change the `num_of_cams` parameter in `hongsuk_egohumans_network_run_dust3r.py`. To modify the view sampling strategy, you can search 'camera sampling' in `hongsuk_egohumans_dataloader.py`. To change the frame sampling strategy, you can change `subsample_rate` in `hongsuk_egohumans_network_run_dust3r.py`. To run on the subset of the dataset, you can change `selected_big_seq_list` and `selected_small_seq_start_and_end_idx_tuple` in `hongsuk_egohumans_network_run_dust3r.py`.
+```bash
+python hongsuk_egohumans_network_run_dust3r.py --output_path ./outputs/egohumans --egohumans_data_root /home/hongsuk/projects/egohumans/data
+```
+
+Step 2. Run DUSt3R global alignment to initalize the camera poses and pointclouds. Needs DUSt3R raw network outputs to be ready.
+```bash
+python hongsuk_egohumans_dust3r_ga.py --dust3r_output_path ./outputs/egohumans/dust3r_network_output_30:11:10.pkl --output_path ./outputs/egohumans --egohumans_data_root /home/hongsuk/projects/egohumans/data --vis
+```
+
+Step 3. Optimization using HMR2 (+HaMeR) and DUSt3R global alignment outputs.
 If you want to run the script for one sequence (ex. 013_tennis_400), you can do the following:
 ```bash
 python hongsuk_egohumans_align_dust3r_hmr2hamer.py --sel-big-seqs 03_fencing --sel-small-seq-range 1 1 --vis
 ```
 
+Step 3-variant. Using bash script or SLURM. Modify the script as you want.
+Bash script:
+```bash
+./optim_script.sh
+```
+
+SLURM:
+```bash
+sbatch egohumans_run.sh  # ssh em4
+```
+
+**EgoExo commands**
+Run the bash script:
+```bash
+./egoexo_run.sh
+```
+
+Some changes are will/should be made in `hongsuk_egoexo_test.py`.
+
+
+**Running MASt3R on EgoHumans commands**
+Step 1. Prepare input images for MASt3R by copying the input images used for our optimization pipeline.
+```bash
+python hongsuk_egohumans_prepare_mast3r_input_images.py --our_optimization_result_dir ./outputs/egohumans/2024nov13_good_cams/num_of_cams4 --output_dir ./outputs/egohumans/test_images_for_mast3r_2024nov13
+```
+
+Step 2. Run MASt3R. But run the code in this repo: https://github.com/hongsukchoi/human_in_world
+
+```bash
+bash run_mast3r_reconstruction.sh
+
+or 
+CUDA_VISIBLE_DEVICES=0 ./batch_scripts/run_mast3r_batch_0.sh"
+CUDA_VISIBLE_DEVICES=0 ./batch_scripts/run_mast3r_batch_1.sh
+CUDA_VISIBLE_DEVICES=0 ./batch_scripts/run_mast3r_batch_2.sh
+...
+```
+
+Step 3. Combine MASt3R outputs with our optimization results and save the final outputs.
+```bash
+python hongsuk_egohumans_combine_ours_dust3r_mast3r.py --our_optimization_result_dir ./outputs/egohumans/2024nov13_good_cams/num_of_cams4 --mast3r_result_dir /scratch/partial_datasets/egoexo/hongsuk/egohumans/test_outputs_of_mast3r_2024nov13 --output_dir ./outputs/egohumans/2024nov13_good_cams_oursdust3rmast3r/num_of_cams4
+```
 
 
 # Quick Commands
