@@ -6,8 +6,8 @@
 ## %j is the job id, %u is the user id, %A is $SLURM_ARRAY_JOB_ID, %a is $SLURM_ARRAY_TASK_ID
 
 #SBATCH --job-name=egohumans          # Job name
-#SBATCH --error=/home/hongsuk/projects/dust3r/jobs2/%j_%t_%A_%a_log.err           # Error file
-#SBATCH --output=/home/hongsuk/projects/dust3r/jobs2/%j_%t_%A_%a_log.out         # Output file
+#SBATCH --error=/home/hongsuk/projects/dust3r/jobs/jobs2/%j_%t_%A_%a_log.err           # Error file
+#SBATCH --output=/home/hongsuk/projects/dust3r/jobs/jobs2/%j_%t_%A_%a_log.out         # Output file
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

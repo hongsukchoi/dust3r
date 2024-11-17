@@ -113,7 +113,7 @@ def main(output_dir: str = './outputs/egohumans/', dust3r_raw_output_dir: str = 
     selected_big_seq_list = [] # ['07_tennis'] #['06_badminton']#['02_lego'] #['06_badminton']  #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
     selected_small_seq_start_and_end_idx_tuple = (1, 20) # (6,13) 
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    num_of_cams = 2
+    num_of_cams = 8
     use_sam2_mask = False
     subsample_rate = 100 # 50
     # output_dir = osp.join(output_dir, 'dust3r_ga_outputs_and_gt_cameras', '2024nov13_good_cams', f'num_of_cams{num_of_cams}')

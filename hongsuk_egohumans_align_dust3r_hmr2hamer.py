@@ -650,7 +650,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     selected_small_seq_start_and_end_idx_tuple = None if len(sel_small_seq_range) == 0 else sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
     # num_of_cams = 3
-    num_of_cams = 2
+    num_of_cams = 10
     subsample_rate = 100 # 50
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
     dust3r_ga_output_dir = osp.join(dust3r_ga_output_dir, f'num_of_cams{num_of_cams}')

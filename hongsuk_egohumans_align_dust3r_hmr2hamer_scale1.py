@@ -665,7 +665,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     # else:
     #     optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, f'2024nov13_good_cams_ablation_scale1',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov16_good_cams_ablation_scale1_redo',  f'num_of_cams{num_of_cams}')
 
     print(f"Optimizing output directory: {optim_output_dir}")
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)

@@ -676,7 +676,32 @@ def show_ground_truth_scene(ground_truth, scene_point_size=0.006, point_shape='c
     import pdb; pdb.set_trace()
     print("Done visualizing")
 
-def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl', dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl', vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'):    
+def main():
+    dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/unc_basketball_03-30-23_02_10/preprocessing/dust3r_world_env_2/000045/images/dust3r_network_output_pointmaps_images.pkl'
+    dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/unc_basketball_03-30-23_02_10/preprocessing/dust3r_world_env_2/000045/images/dust3r_global_alignment_results.pkl'
+    vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/unc_basketball_03-30-23_02_10/45/input_data.pkl'
+    run(vis=True, dust3r_network_output_path=dust3r_network_output_path, dust3r_ga_output_path=dust3r_ga_output_path, vitpose_and_gt_path=vitpose_and_gt_path)
+    # import json
+    # with open('egoexo_sequences.json', 'r') as f:
+    #     sequences = json.load(f)
+    # # Process a portion of sequences based on part index
+    # part_idx = 2  # Which part to process (1-based index)
+    # total_parts = 5  # Total number of parts to divide sequences into
+    
+    # # Calculate start and end indices for this part
+    # num_sequences = len(sequences)
+    # sequences_per_part = num_sequences // total_parts
+    # start_idx = (part_idx - 1) * sequences_per_part
+    # end_idx = start_idx + sequences_per_part if part_idx < total_parts else num_sequences
+    
+    # # Select subset of sequences for this part
+    # sequences = sequences[start_idx:end_idx]
+    # print(f"Processing part {part_idx}/{total_parts}: {len(sequences)} sequences from index {start_idx} to {end_idx}")
+
+    # for sequence in tqdm.tqdm(sequences):
+    #     run(dust3r_network_output_path=sequence['dust3r_network_output_path'], dust3r_ga_output_path=sequence['dust3r_ga_output_path'], vitpose_and_gt_path=sequence['vitpose_gt_path'])
+
+def run(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl', dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl', vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'):    
     # dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl'
     # dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl'
     # vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'
@@ -698,7 +723,7 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
     stage2_start_idx_percentage = 0.2 #0.0 # 0.5 #0.2
     stage3_start_idx_percentage = 0.8 #0.9 
     min_niter = 500
-    niter = 10 #300
+    niter = 300
     niter_factor = 15 #20 ##10 # niter = int(niter_factor * scene_scale)
     lr = 0.015
     dist_tol = 0.3
@@ -757,6 +782,13 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
     # Scale initialization
     scene_scale = vitpose_and_gt_dict['alpha']
     im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+    niter = max(int(niter_factor * scene_scale), min_niter)
+    # Scale little bit larger to ensure humans are inside the views
+    scene_scale = scene_scale * scale_increasing_factor
+
+    print(f"Dust3r to Human original scale ratio: {scene_scale}")
+    print(f"Set the number of iterations to {niter}; {niter_factor} * {scene_scale}")
+    print(f"Rescaled Dust3r to Human scale ratio: {scene_scale}")
 
     # Initialize the scene optimizer
     scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, focal_break=focal_break, has_human_cue=False)
@@ -766,7 +798,10 @@ def main(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool 
     num_of_cams = len(cam_names)
     if num_of_cams >= 2:
         if init == 'known_params_hongsuk':
-            init_loss = scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=None, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+            try:
+                init_loss = scene.init_from_known_params_hongsuk(im_focals=im_focals, im_poses=im_poses, pts3d=None, niter_PnP=niter_PnP, min_conf_thr=min_conf_thr_for_pnp)
+            except:
+                return 
             
             print("Known params init")
         else:

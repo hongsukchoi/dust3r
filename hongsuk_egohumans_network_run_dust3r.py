@@ -26,7 +26,7 @@ def main(output_dir: str = './outputs/egohumans/', egohumans_data_root: str = '.
     selected_big_seq_list = [] #['05_volleyball'] #['04_basketball'] #['03_fencing'] #['02_lego'] #['01_tagging']
     selected_small_seq_start_and_end_idx_tuple = (1, 20)
     cam_names = None # ['cam01', 'cam02', 'cam03', 'cam04']
-    num_of_cams = 2 # 2, 3, 4, 5, 10
+    num_of_cams = 8 # 2, 3, 4, 5, 10
     subsample_rate = 100 #50 #100
     # output_dir = osp.join(output_dir, 'dust3r_raw_outputs', '2024nov13_good_cams', f'num_of_cams{num_of_cams}')
     # output_dir = osp.join(output_dir, 'dust3r_raw_outputs', 'dust3r_raw_outputs_random_sampled_views', f'num_of_cams{num_of_cams}')

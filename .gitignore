@@ -7,6 +7,7 @@ inputs/
 outputs/
 vis_keypoints/
 inspect_egohumans_reid/
+jobs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
