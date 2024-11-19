@@ -182,7 +182,7 @@ def main(world_env_pkl: str, world_scale_factor: float = 1., after_opt: bool = F
 
 #     show_env_in_viser(world_env_pkl, world_scale_factor)
     
-def show_env_human_in_viser(world_env: dict = None, world_env_pkl: str = '', world_scale_factor: float = 1., smplx_vertices_dict: dict = None, smplx_faces: np.ndarray = None):
+def show_env_human_in_viser(world_env: dict = None, world_env_pkl: str = '', world_scale_factor: float = 1., smplx_vertices_dict: dict = None, smplx_faces: np.ndarray = None, gt_cameras: dict = None):
     if world_env is None:
         # Load world environment data estimated by Mast3r
         with open(world_env_pkl, 'rb') as f:
@@ -270,6 +270,31 @@ def show_env_human_in_viser(world_env: dict = None, world_env_pkl: str = '', wor
                 wireframe=False,
                 color=get_color(img_idx),
             )
+    
+    if gt_cameras is not None:
+        for img_name in gt_cameras.keys():
+            # Visualize the gt camera
+            # camera = gt_cameras[img_name]
+            # cam2world_Rt_homo = camera['cam2world_4by4'].copy()
+            cam2world_Rt_homo = gt_cameras[img_name]
+
+            cam2world_R = rot_180 @ cam2world_Rt_homo[:3, :3]
+            cam2world_t = cam2world_Rt_homo[:3, 3] @ rot_180
+
+            # rotation matrix to quaternion
+            quat = R.from_matrix(cam2world_R).as_quat()
+            # xyzw to wxyz
+            quat = np.concatenate([quat[3:], quat[:3]])
+            # translation vector
+            trans = cam2world_t   
+
+            # add camera
+            cam_handle = server.scene.add_frame(
+                f"/gt_cam_{img_name}",
+                wxyz=quat,
+                position=trans,
+            )
+            cam_handles.append(cam_handle)
 
 
     # add transform controls, initialize the location with the first two cameras
