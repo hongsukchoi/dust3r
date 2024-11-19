@@ -204,7 +204,7 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
             bbox_area = bbox[2] * bbox[3]
             det_score = bbox[4]
             loss_weights.append(det_score / bbox_area)
-            bbox_areas += bbox_area
+            # bbox_areas += bbox_area # Don't need this for now
             cam_indices.append(cam_names.index(cam_name))
             poses2d.append(multiview_multiperson_poses2d[human_name][cam_name])
 
@@ -625,7 +625,7 @@ def convert_human_params_to_numpy(human_params):
 
     return human_params_np
 
-def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov14_good_cams', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/2024nov14_good_cams', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov13', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov16_name_uniform_cams', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/2024nov16_name_uniform_cams', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov13', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_dir, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
@@ -649,8 +649,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     selected_big_seq_list = sel_big_seqs #['03_fencing'] # #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
     selected_small_seq_start_and_end_idx_tuple = None if len(sel_small_seq_range) == 0 else sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    # num_of_cams = 3
-    num_of_cams = 10
+    num_of_cams = 8
     subsample_rate = 100 # 50
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
     dust3r_ga_output_dir = osp.join(dust3r_ga_output_dir, f'num_of_cams{num_of_cams}')
@@ -665,7 +664,10 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     # else:
     #     optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, f'2024nov14_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
+    # optim_output_dir = osp.join(output_dir, f'2024nov14_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
+    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov16_name_uniform_cams',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov19_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
+
 
     print(f"Optimizing output directory: {optim_output_dir}")
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)

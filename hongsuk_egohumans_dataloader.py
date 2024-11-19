@@ -310,7 +310,10 @@ class EgoHumansDataset(Dataset):
                         else:
                             available_cameras = sorted(annot['cameras'].keys())
                             if len(available_cameras) < self.num_of_cams:
-                                selected_cameras = available_cameras
+                                print(f'Warning: {small_seq} does not have enough cameras for {self.num_of_cams}; skipping this frame')
+                                continue
+                                # selected_cameras = available_cameras
+
                             else:
                                 # TEMP
                                 # Sampling that I (Hongsuk) used after Nov 6th 2024 - Nov 12th 2024
