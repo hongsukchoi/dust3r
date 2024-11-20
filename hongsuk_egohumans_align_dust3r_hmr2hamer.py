@@ -190,8 +190,8 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
         points_img = points_img[:, :, :2, :] / points_img[:, :, 2:3, :]  # (B, N, 2, J)
         points_img = points_img.transpose(2, 3)  # (B, N, J, 2)
     else:
-        if num_of_humans_for_optimization < 1:
-            raise ValueError(f"num_of_humans_for_optimization must be greater than 0, but got {num_of_humans_for_optimization}")
+        # if num_of_humans_for_optimization < 1:
+        #     raise ValueError(f"num_of_humans_for_optimization must be greater than 0, but got {num_of_humans_for_optimization}")
         points_homo = torch.cat((smplx_j3d_expanded, torch.ones((B, N, J, 1), device=device)), dim=3)  # (B, N, J, 4)
         # detach the world2cam_expanded and intrinsics_expanded for the elements from num_of_humans_for_optimization to batch_size
         world2cam_expanded_detached = world2cam_expanded[num_of_humans_for_optimization:].detach()
@@ -200,6 +200,8 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
         intrinsics_expanded = torch.cat((intrinsics_expanded[:num_of_humans_for_optimization], intrinsics_expanded_detached), dim=0)
         points_cam = torch.matmul(world2cam_expanded, points_homo.transpose(2, 3))  # (B, N, 4, J)
         points_img = torch.matmul(intrinsics_expanded, points_cam[:, :, :3, :])  # (B, N, 3, J)
+        points_img = points_img[:, :, :2, :] / points_img[:, :, 2:3, :]  # (B, N, 2, J)
+        points_img = points_img.transpose(2, 3)  # (B, N, J, 2)
 
     # Initialize total loss
     total_loss = 0
@@ -635,7 +637,7 @@ def convert_human_params_to_numpy(human_params):
 
     return human_params_np
 
-def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov16_name_uniform_cams', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/2024nov16_name_uniform_cams', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov13', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_human_optim: int=-1, use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov16_name_uniform_cams', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/2024nov16_name_uniform_cams', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov13', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_dir, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
@@ -652,7 +654,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     dist_tol = 0.3
     scale_increasing_factor = 1.3 #f1.3 #2.2 #1.3 #1.3 #2 #1.3
     update_scale_factor = 1.1
-    num_of_humans_for_optimization = None
+    num_of_humans_for_optimization = num_human_optim 
     focal_break = 20 # default is 20 in dust3r code, lower the more focal length can change
     # identified_vitpose_hmr2_hamer_output_dir = None # TEMP
 
@@ -661,7 +663,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     selected_big_seq_list = sel_big_seqs #['03_fencing'] # #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
     selected_small_seq_start_and_end_idx_tuple = None if len(sel_small_seq_range) == 0 else sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    num_of_cams = 4
+    num_of_cams = num_of_cams
     # TEMP
     human_loss_weight = human_loss_weight / (num_of_cams / 4)
     subsample_rate = 100 # 50
@@ -834,7 +836,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             'human_params': copy.deepcopy(human_params),
             'human_inited_cam_poses': copy.deepcopy(human_inited_cam_poses),
         }
-        if num_of_humans_for_optimization is None:
+        if num_of_humans_for_optimization == -1:
             num_of_humans_for_optimization = len(human_params)
             print(f"Cameras / Scenes are updated by all {num_of_humans_for_optimization} humans")
         else:
@@ -1003,7 +1005,8 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
         # TEMP
         # residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
 
-
+        # TEMP
+        niter = 3000
         # 1st stage; stage 1 is from 0% to 30%
         stage1_iter = list(range(0, int(niter * stage2_start_idx_percentage)))
         # 2nd stage; stage 2 is from 30% to 60%
