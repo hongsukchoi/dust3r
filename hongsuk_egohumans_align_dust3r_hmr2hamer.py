@@ -682,7 +682,8 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
     # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, f'2024nov14_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov16_name_uniform_cams',  f'num_of_cams{num_of_cams}') #2024nov19_good_cams_focal_fixed
-    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'tmp',  f'num_of_cams{num_of_cams}')
+    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov19',  f'num_of_cams{num_of_cams}_num_of_humans{num_of_humans_for_optimization}')
+    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'tmp',  f'num_of_cams{num_of_cams}')
 
 
     print(f"Optimizing output directory: {optim_output_dir}")
@@ -1005,8 +1006,6 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
         # TEMP
         # residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
 
-        # TEMP
-        niter = 3000
         # 1st stage; stage 1 is from 0% to 30%
         stage1_iter = list(range(0, int(niter * stage2_start_idx_percentage)))
         # 2nd stage; stage 2 is from 30% to 60%
