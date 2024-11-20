@@ -183,11 +183,23 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
     smplx_j3d_expanded = smplx_j3d.unsqueeze(1).expand(-1, N, -1, -1)  # (B, N, J, 3)
     
     # Project all joints at once
-    points_homo = torch.cat((smplx_j3d_expanded, torch.ones((B, N, J, 1), device=device)), dim=3)  # (B, N, J, 4)
-    points_cam = torch.matmul(world2cam_expanded, points_homo.transpose(2, 3))  # (B, N, 4, J)
-    points_img = torch.matmul(intrinsics_expanded, points_cam[:, :, :3, :])  # (B, N, 3, J)
-    points_img = points_img[:, :, :2, :] / points_img[:, :, 2:3, :]  # (B, N, 2, J)
-    points_img = points_img.transpose(2, 3)  # (B, N, J, 2)
+    if num_of_humans_for_optimization == batch_size:
+        points_homo = torch.cat((smplx_j3d_expanded, torch.ones((B, N, J, 1), device=device)), dim=3)  # (B, N, J, 4)
+        points_cam = torch.matmul(world2cam_expanded, points_homo.transpose(2, 3))  # (B, N, 4, J)
+        points_img = torch.matmul(intrinsics_expanded, points_cam[:, :, :3, :])  # (B, N, 3, J)
+        points_img = points_img[:, :, :2, :] / points_img[:, :, 2:3, :]  # (B, N, 2, J)
+        points_img = points_img.transpose(2, 3)  # (B, N, J, 2)
+    else:
+        if num_of_humans_for_optimization < 1:
+            raise ValueError(f"num_of_humans_for_optimization must be greater than 0, but got {num_of_humans_for_optimization}")
+        points_homo = torch.cat((smplx_j3d_expanded, torch.ones((B, N, J, 1), device=device)), dim=3)  # (B, N, J, 4)
+        # detach the world2cam_expanded and intrinsics_expanded for the elements from num_of_humans_for_optimization to batch_size
+        world2cam_expanded_detached = world2cam_expanded[num_of_humans_for_optimization:].detach()
+        intrinsics_expanded_detached = intrinsics_expanded[num_of_humans_for_optimization:].detach()
+        world2cam_expanded = torch.cat((world2cam_expanded[:num_of_humans_for_optimization], world2cam_expanded_detached), dim=0)
+        intrinsics_expanded = torch.cat((intrinsics_expanded[:num_of_humans_for_optimization], intrinsics_expanded_detached), dim=0)
+        points_cam = torch.matmul(world2cam_expanded, points_homo.transpose(2, 3))  # (B, N, 4, J)
+        points_img = torch.matmul(intrinsics_expanded, points_cam[:, :, :3, :])  # (B, N, 3, J)
 
     # Initialize total loss
     total_loss = 0
@@ -228,7 +240,7 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
         human_proj_joints_coco = human_proj_joints_coco[:, coco_main_body_joint_idx, :]
         poses2d = poses2d[:, coco_main_body_joint_idx, :]
 
-        # Compute MSE loss with weights
+        # Compute MSE loss with weights 
         one_human_loss = loss_weights[:, None, None].repeat(1, human_proj_joints_coco.shape[1], 1) \
             * human_proj_joints_coco[:, :, 2:] * poses2d[:, :, 2:] \
             * F.mse_loss(human_proj_joints_coco[:, :, :2], poses2d[:, :, :2], reduction='none').mean(dim=-1, keepdim=True)
@@ -239,12 +251,9 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
         for idx, cam_idx in enumerate(cam_indices):
             projected_joints[cam_names[cam_idx]][human_name] = human_proj_joints_coco[idx]
         
-        if human_idx >= num_of_humans_for_optimization:
-            break
-
     # Add shape prior if requested
     if shape_prior_weight > 0:
-        total_loss += shape_prior_weight * F.mse_loss(betas[:num_of_humans_for_optimization], torch.zeros_like(betas[:num_of_humans_for_optimization]))
+        total_loss += shape_prior_weight * F.mse_loss(betas, torch.zeros_like(betas))
 
     return total_loss, projected_joints
 
@@ -373,7 +382,8 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
         if conf > max_conf:
             max_conf = conf
             main_human_name = human_name
-    
+    print("The main (reference) human name for the scale initilization is: ", main_human_name)
+
     # Initialize Stage 2: Get the initial camera poses with respect to the first camera
     global_orient_first_cam = multiview_multiple_human_cam_pred[first_cam][main_human_name]['params']['global_orient'][0].cpu().numpy()
     # axis angle to rotation matrix
@@ -635,11 +645,13 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     stage2_start_idx_percentage = 0.2 # 0.5 #0.2
     stage3_start_idx_percentage = 0.85 
     min_niter = 500
+    max_niter = 2000
     niter = 300
     niter_factor = 15 # decides the length of optimization # 20 ##10 # niter = int(niter_factor * scene_scale)
     lr = 0.015
     dist_tol = 0.3
-    scale_increasing_factor = 1.3 #1.3 #2 #1.3
+    scale_increasing_factor = 1.3 #f1.3 #2.2 #1.3 #1.3 #2 #1.3
+    update_scale_factor = 1.1
     num_of_humans_for_optimization = None
     focal_break = 20 # default is 20 in dust3r code, lower the more focal length can change
     # identified_vitpose_hmr2_hamer_output_dir = None # TEMP
@@ -649,7 +661,9 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     selected_big_seq_list = sel_big_seqs #['03_fencing'] # #['07_tennis'] #  # #['01_tagging', '02_lego, 05_volleyball', '04_basketball', '03_fencing'] # ##[, , ''] 
     selected_small_seq_start_and_end_idx_tuple = None if len(sel_small_seq_range) == 0 else sel_small_seq_range # ex) [0, 10]
     cam_names = None #sorted(['cam01', 'cam02', 'cam03', 'cam04'])
-    num_of_cams = 8
+    num_of_cams = 4
+    # TEMP
+    human_loss_weight = human_loss_weight / (num_of_cams / 4)
     subsample_rate = 100 # 50
     dust3r_raw_output_dir = osp.join(dust3r_raw_output_dir, f'num_of_cams{num_of_cams}')
     dust3r_ga_output_dir = osp.join(dust3r_ga_output_dir, f'num_of_cams{num_of_cams}')
@@ -665,8 +679,8 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
     #     optim_output_dir = osp.join(output_dir, 'nov11', f'sota_comparison_trial1_use_gt_focal',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, f'2024nov14_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
-    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov16_name_uniform_cams',  f'num_of_cams{num_of_cams}')
-    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov19_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
+    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov16_name_uniform_cams',  f'num_of_cams{num_of_cams}') #2024nov19_good_cams_focal_fixed
+    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'tmp',  f'num_of_cams{num_of_cams}')
 
 
     print(f"Optimizing output directory: {optim_output_dir}")
@@ -687,7 +701,6 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
 
     # Human related Config
     shape_prior_weight = 1.0
-    human_lr = lr * 1.0 # not really used; to use modify the adjust_lr function; define different learning rate for the human parameters
     # set smplx layers
     smplx_layer_dict = {
         1: smplx.create(model_path = '/home/hongsuk/projects/egoexo/essentials/body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 1).to(device),
@@ -823,11 +836,11 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
         }
         if num_of_humans_for_optimization is None:
             num_of_humans_for_optimization = len(human_params)
-            print(f"Optimizing all {num_of_humans_for_optimization} humans")
+            print(f"Cameras / Scenes are updated by all {num_of_humans_for_optimization} humans")
         else:
             num_of_humans_for_optimization = min(num_of_humans_for_optimization, len(human_params))
-            print(f"Optimizing {num_of_humans_for_optimization} humans")
-            print(f"Names of humans to optimize: {sorted(list(human_params.keys()))[:num_of_humans_for_optimization]}")
+            print(f"Cameras / Scenes are updated by {num_of_humans_for_optimization} humans")
+            print(f"Names of humans usedto optimize: {sorted(list(human_params.keys()))[:num_of_humans_for_optimization]}")
 
         """ Initialize the scene parameters """
         # Initialize the scale factor between the dust3r cameras and the human_inited_cam_poses
@@ -872,7 +885,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             else:
                 print("Not enough camera locations to perform Procrustes alignment or distance ratio calculation")
                 scene_scale = 80.0
-            niter = max(int(niter_factor * scene_scale), min_niter)
+            niter = min(max(int(niter_factor * scene_scale), min_niter), max_niter)
             # Scale little bit larger to ensure humans are inside the views
             scene_scale = scene_scale * scale_increasing_factor
 
@@ -892,7 +905,7 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
             print("Error in Procrustes alignment or distance ratio calculation due to Dust3r or HMR2 failure...")
             print("Setting the scale to 80.0 and switch to HMR2 initialized camera poses")
             scene_scale = 80.0
-            niter = max(int(niter_factor * scene_scale), min_niter)
+            niter = min(max(int(niter_factor * scene_scale), min_niter), max_niter)
             scene_scale = scene_scale * scale_increasing_factor
 
             # Switch dust3r camera poses to the hmr2 initialized camera poses
@@ -959,6 +972,37 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
         # scene_scale_tol = 0.15
         # print(f"Scene scale tolerance: {scene_scale_tol:.3f}")
 
+        print(">>> Set the scene scale as a parameter to optimize")
+        print("Do the final check for the scene scale")
+        res_scale = 1.0
+        multiview_cam2world_4by4  = scene.get_im_poses().detach()  # (len(cam_names), 4, 4)
+        multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
+
+        root_transl_list = []
+        for human_name in human_params.keys():
+            root_transl = human_params[human_name]['root_transl'].detach()
+            root_transl_list.append(root_transl)
+        root_transl_list = torch.stack(root_transl_list) # (N, 1, 3)
+        # Apply cam2world to the root_transl
+        root_transl_cam = (multiview_world2cam_4by4[:, None, :3, :3] @ root_transl_list[None, :, :, :].transpose(2,3)).transpose(2,3) + multiview_world2cam_4by4[:, None, :3, 3:].transpose(2,3) # (len(cam_names), N, 1, 3)
+        root_transl_cam = root_transl_cam.reshape(-1, 3) # (len(cam_names) * N, 3)
+        # check if all z of root_transl_cam are positive
+        while not (root_transl_cam[:, 2] > 0).all():
+            # print("Some of the root_transl_cam have negative z values;")
+            res_scale = res_scale * update_scale_factor
+            niter = min(max(int(niter * update_scale_factor), min_niter), max_niter)
+
+            print(f"Rescaling the scene scale to {res_scale:.3f}")
+
+            # Apply cam2world to the root_transl
+            root_transl_cam = (multiview_world2cam_4by4[:, None, :3, :3] @ root_transl_list[None, :, :, :].transpose(2,3)).transpose(2,3) \
+                  + res_scale * multiview_world2cam_4by4[:, None, :3, 3:].transpose(2,3) # (len(cam_names), N, 1, 3)
+            root_transl_cam = root_transl_cam.reshape(-1, 3) # (len(cam_names) * N, 3)
+        print("All root_transl_cam have positive z values")
+        residual_scene_scale = nn.Parameter(torch.tensor(res_scale, requires_grad=True).to(device))
+        # TEMP
+        # residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
+
 
         # 1st stage; stage 1 is from 0% to 30%
         stage1_iter = list(range(0, int(niter * stage2_start_idx_percentage)))
@@ -966,10 +1010,6 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
         stage2_iter = list(range(int(niter * stage2_start_idx_percentage), int(niter * stage3_start_idx_percentage)))
         # 3rd stage; stage 3 is from 60% to 100%
         stage3_iter = list(range(int(niter * stage3_start_idx_percentage), niter))
-
-        print(">>> Set the scene scale as a parameter to optimize")
-        residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
-
         # Given the number of iterations, run the optimizer while forwarding the scene with the current parameters to get the loss
         with tqdm.tqdm(total=niter) as bar:
             while bar.n < bar.total:
@@ -978,7 +1018,8 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
                     optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 1, lr)
                     print("\n1st stage optimization starts at ", bar.n)
                 elif bar.n == stage2_iter[0]:
-                    human_loss_weight = 10.
+                    # human_loss_weight = 10.
+                    human_loss_weight *= 2.
                     lr_base = lr = 0.01
                     optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 2, lr)
                     print("\n2nd stage optimization starts at ", bar.n)
@@ -1011,7 +1052,8 @@ def main(output_dir: str = './outputs/egohumans/', use_gt_focal: bool = False, s
                         show_optimization_results(world_env, human_params, smplx_layer_dict[1])
 
                 elif bar.n == stage3_iter[0]:
-                    human_loss_weight = 5.
+                    # human_loss_weight = 5.
+                    human_loss_weight *= 0.5
 
                     optimizer = get_stage_optimizer(human_params, scene_params, residual_scene_scale, 3, lr)
                     print("\n3rd stage optimization starts at ", bar.n)
