@@ -440,34 +440,37 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
 
     # Initialize Stage 3: If the first camera (world coordinate frame) has missing person,
     # move other camera view's human to the first camera view's human's location
-    for missing_human_name in missing_human_names_in_first_cam:
-        missing_human_exist_cam_idx = 0
-        other_cam_name = missing_human_names_in_first_cam[missing_human_name][missing_human_exist_cam_idx]
-        while other_cam_name not in sorted(list(cam_poses.keys())):
-            missing_human_exist_cam_idx += 1
-            if missing_human_exist_cam_idx == len(missing_human_names_in_first_cam[missing_human_name]):
-                print(f"Warning: {missing_human_name} cannot be handled because it can't transform to the first camera coordinate frame")
-                continue
+    try:
+        for missing_human_name in missing_human_names_in_first_cam:
+            missing_human_exist_cam_idx = 0
             other_cam_name = missing_human_names_in_first_cam[missing_human_name][missing_human_exist_cam_idx]
-        missing_human_params_in_other_cam = multiview_multiple_human_cam_pred[other_cam_name][missing_human_name]['params']
-        # keys: 'body_pose', 'betas', 'global_orient', 'right_hand_pose', 'left_hand_pose', 'transl'
-        # transform the missing_human_params_in_other_cam to the first camera coordinate frame
-        other_cam_to_first_cam_transformation = cam_poses[other_cam_name] # (4,4)
-        missing_human_params_in_other_cam_global_orient = missing_human_params_in_other_cam['global_orient'][0].cpu().numpy() # (3,)
-        missing_human_params_in_other_cam_global_orient = R.from_rotvec(missing_human_params_in_other_cam_global_orient).as_matrix().astype(np.float32) # (3,3)
-        missing_human_params_in_other_cam_global_orient = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_params_in_other_cam_global_orient # (3,3)
-        missing_human_params_in_other_cam['global_orient'] = torch.from_numpy(R.from_matrix(missing_human_params_in_other_cam_global_orient).as_rotvec().astype(np.float32)).to(device) # (3,)
+            while other_cam_name not in sorted(list(cam_poses.keys())):
+                missing_human_exist_cam_idx += 1
+                if missing_human_exist_cam_idx == len(missing_human_names_in_first_cam[missing_human_name]):
+                    print(f"Warning: {missing_human_name} cannot be handled because it can't transform to the first camera coordinate frame")
+                    continue
+                other_cam_name = missing_human_names_in_first_cam[missing_human_name][missing_human_exist_cam_idx]
+            missing_human_params_in_other_cam = multiview_multiple_human_cam_pred[other_cam_name][missing_human_name]['params']
+            # keys: 'body_pose', 'betas', 'global_orient', 'right_hand_pose', 'left_hand_pose', 'transl'
+            # transform the missing_human_params_in_other_cam to the first camera coordinate frame
+            other_cam_to_first_cam_transformation = cam_poses[other_cam_name] # (4,4)
+            missing_human_params_in_other_cam_global_orient = missing_human_params_in_other_cam['global_orient'][0].cpu().numpy() # (3,)
+            missing_human_params_in_other_cam_global_orient = R.from_rotvec(missing_human_params_in_other_cam_global_orient).as_matrix().astype(np.float32) # (3,3)
+            missing_human_params_in_other_cam_global_orient = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_params_in_other_cam_global_orient # (3,3)
+            missing_human_params_in_other_cam['global_orient'] = torch.from_numpy(R.from_matrix(missing_human_params_in_other_cam_global_orient).as_rotvec().astype(np.float32)).to(device) # (3,)
 
-        missing_human_init_trans_in_other_cam = multiview_multiperson_init_trans[missing_human_name][other_cam_name]
-        missing_human_init_trans_in_first_cam = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_init_trans_in_other_cam + other_cam_to_first_cam_transformation[:3, 3]
-        # compenstate rotation (translation from origin to root joint was not cancled)
-        root_transl_compensator = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_params_in_other_cam['org_cam_root_transl'] 
-        missing_human_init_trans_in_first_cam = missing_human_init_trans_in_first_cam + root_transl_compensator
-        #
-        missing_human_params_in_other_cam['root_transl'] = torch.from_numpy(missing_human_init_trans_in_first_cam).reshape(1, -1).to(device)
+            missing_human_init_trans_in_other_cam = multiview_multiperson_init_trans[missing_human_name][other_cam_name]
+            missing_human_init_trans_in_first_cam = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_init_trans_in_other_cam + other_cam_to_first_cam_transformation[:3, 3]
+            # compenstate rotation (translation from origin to root joint was not cancled)
+            root_transl_compensator = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_params_in_other_cam['org_cam_root_transl'] 
+            missing_human_init_trans_in_first_cam = missing_human_init_trans_in_first_cam + root_transl_compensator
+            #
+            missing_human_params_in_other_cam['root_transl'] = torch.from_numpy(missing_human_init_trans_in_first_cam).reshape(1, -1).to(device)
 
-        first_cam_human_params[missing_human_name] = missing_human_params_in_other_cam
-
+            first_cam_human_params[missing_human_name] = missing_human_params_in_other_cam
+    except:
+        print("Warning: Some humans are missing in the first camera view and cannot be handled")
+        
     # Visualize the first cam human parameters with the camera poses
     # decode the human parameters to 3D vertices and visualize
     if get_vertices:
@@ -682,7 +685,10 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
     # optim_output_dir = osp.join(output_dir, 'nov12', f'sota_comparison_trial1',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, f'2024nov14_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov16_name_uniform_cams',  f'num_of_cams{num_of_cams}') #2024nov19_good_cams_focal_fixed
-    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov19',  f'num_of_cams{num_of_cams}_num_of_humans{num_of_humans_for_optimization}')
+    if num_of_humans_for_optimization != -1:    
+        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov19',  f'num_of_cams{num_of_cams}_num_of_humans{num_of_humans_for_optimization}')
+    else:
+        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov19',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'tmp',  f'num_of_cams{num_of_cams}')
 
 
@@ -774,10 +780,10 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
         # Make output name
         output_name = f"{sample['sequence']}_{sample['frame']}_{''.join(cam_names)}"
         # TEMP
-        # # if the file already exists, skip
-        # if osp.exists(osp.join(optim_output_dir, f'{output_name}.pkl')):
-        #     print(f"Skipping {output_name} because it already exists...")
-        #     continue
+        # if the file already exists, skip
+        if osp.exists(osp.join(optim_output_dir, f'{output_name}.pkl')):
+            print(f"Skipping {output_name} because it already exists...")
+            continue
 
         """ Initialize the human parameters """
         print("Initializing human parameters")
@@ -884,7 +890,7 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
                 if dust3r_cam_dist < 1e-3: # camera distance is too small
                     raise ValueError(f"Maybe Dust3r failure; Dust3r camera distance is too small: {dust3r_cam_dist:.3f}")
                 dist_ratio = hmr2_cam_dist / dust3r_cam_dist
-                scene_scale = dist_ratio
+                scene_scale = abs(dist_ratio)
             else:
                 print("Not enough camera locations to perform Procrustes alignment or distance ratio calculation")
                 scene_scale = 80.0
@@ -990,7 +996,9 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
         root_transl_cam = (multiview_world2cam_4by4[:, None, :3, :3] @ root_transl_list[None, :, :, :].transpose(2,3)).transpose(2,3) + multiview_world2cam_4by4[:, None, :3, 3:].transpose(2,3) # (len(cam_names), N, 1, 3)
         root_transl_cam = root_transl_cam.reshape(-1, 3) # (len(cam_names) * N, 3)
         # check if all z of root_transl_cam are positive
-        while not (root_transl_cam[:, 2] > 0).all():
+        scale_update_iter = 0
+        max_scale_update_iter = 10
+        while not (root_transl_cam[:, 2] > 0).all() and scale_update_iter < max_scale_update_iter:
             # print("Some of the root_transl_cam have negative z values;")
             res_scale = res_scale * update_scale_factor
             niter = min(max(int(niter * update_scale_factor), min_niter), max_niter)
@@ -1001,7 +1009,14 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
             root_transl_cam = (multiview_world2cam_4by4[:, None, :3, :3] @ root_transl_list[None, :, :, :].transpose(2,3)).transpose(2,3) \
                   + res_scale * multiview_world2cam_4by4[:, None, :3, 3:].transpose(2,3) # (len(cam_names), N, 1, 3)
             root_transl_cam = root_transl_cam.reshape(-1, 3) # (len(cam_names) * N, 3)
-        print("All root_transl_cam have positive z values")
+            scale_update_iter += 1
+        if scale_update_iter == max_scale_update_iter:
+            print("Warning: Maximum number of scale update iterations reached")
+            print("Set niter to 300")
+            res_scale = 1.0
+            niter = 300
+        else:
+            print("All root_transl_cam have positive z values")
         residual_scene_scale = nn.Parameter(torch.tensor(res_scale, requires_grad=True).to(device))
         # TEMP
         # residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
