@@ -524,7 +524,7 @@ def get_stage_optimizer(human_params, scene_params, residual_scene_scale, stage:
 
     if stage == 1: # 1st
         # optimizing_param_names = ['root_transl', 'betas'] # , 'global_orient'
-        optimizing_param_names = ['root_transl', 'betas'] # , 'global_orient'
+        optimizing_param_names = ['root_transl'] #, 'betas'] # , 'global_orient'
 
         human_params_to_optimize = []
         human_params_names_to_optimize = []
@@ -686,9 +686,9 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
     # optim_output_dir = osp.join(output_dir, f'2024nov14_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov16_name_uniform_cams',  f'num_of_cams{num_of_cams}') #2024nov19_good_cams_focal_fixed
     if num_of_humans_for_optimization != -1:    
-        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25',  f'num_of_cams{num_of_cams}_num_of_humans{num_of_humans_for_optimization}')
+        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25_nobetafirst',  f'num_of_cams{num_of_cams}_num_of_humans{num_of_humans_for_optimization}')
     else:
-        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25',  f'num_of_cams{num_of_cams}')
+        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25_nobetafirst',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'tmp',  f'num_of_cams{num_of_cams}')
 
 

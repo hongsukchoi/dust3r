@@ -686,9 +686,9 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
     # optim_output_dir = osp.join(output_dir, f'2024nov14_good_cams_focal_fixed',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov16_name_uniform_cams',  f'num_of_cams{num_of_cams}') #2024nov19_good_cams_focal_fixed
     if num_of_humans_for_optimization != -1:    
-        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25',  f'num_of_cams{num_of_cams}_num_of_humans{num_of_humans_for_optimization}')
+        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25_noscaleinit',  f'num_of_cams{num_of_cams}_num_of_humans{num_of_humans_for_optimization}')
     else:
-        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25',  f'num_of_cams{num_of_cams}')
+        optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25_noscaleinit',  f'num_of_cams{num_of_cams}')
     # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'tmp',  f'num_of_cams{num_of_cams}')
 
 
@@ -852,6 +852,7 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
             print(f"Names of humans usedto optimize: {sorted(list(human_params.keys()))[:num_of_humans_for_optimization]}")
 
         """ Initialize the scene parameters """
+        """
         # Initialize the scale factor between the dust3r cameras and the human_inited_cam_poses
         # Perform Procrustes alignment
         human_inited_cam_locations = []
@@ -927,6 +928,7 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
             pts3d = pts3d_scaled
             # Don't scale the camera locations
             # im_poses[:, :3, 3] = im_poses[:, :3, 3] * scene_scale
+        """
 
         # define the scene class that will be optimized
         scene = global_aligner(dust3r_network_output, device=device, mode=mode, verbose=not silent, focal_break=focal_break, has_human_cue=False)
@@ -950,37 +952,6 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
                 raise ValueError(f"Unknown initialization method: {init}")
         scene_params = [p for p in scene.parameters() if p.requires_grad]
 
-        # Visualize the initilization of 3D human and 3D world
-        if vis and first_cam_human_vertices is not None:
-            world_env = parse_to_save_data(scene, cam_names)
-            try:
-                show_env_human_in_viser(world_env=world_env, world_scale_factor=1., smplx_vertices_dict=first_cam_human_vertices, smplx_faces=smplx_layer.faces)
-            except:
-                import pdb; pdb.set_trace()
-
-        # Compute the sum of distances between camera centers; im_poses[:, :3, 3]
-        # Get camera centers from im_poses
-        init_cam_centers = scene.get_im_poses()[:, :3, 3]  # (N, 3)
-        
-        # Compute distances between all pairs of cameras
-        init_cam_center_dist_total = 0
-        init_cam_center_dist_totalpairs_dist = []
-        for i in range(len(init_cam_centers)):
-            for j in range(i+1, len(init_cam_centers)):
-                dist = torch.norm(init_cam_centers[i] - init_cam_centers[j]).detach()
-                # init_cam_center_dist_total += dist
-                init_cam_center_dist_totalpairs_dist.append(dist)
-        init_cam_center_dist_total = torch.stack(init_cam_center_dist_totalpairs_dist)
-        # recover the original initial scale for regularization
-        init_cam_center_dist_total = init_cam_center_dist_total / scale_increasing_factor
-
-        # init_cam_center_dist_total = torch.sum(torch.stack(pairs_dist))
-        # init_cam_center_dist_total = init_cam_center_dist_total.detach()
-        # print(f"Initial sum of distances between camera centers: {init_cam_center_dist_total:.3f}")
-        # set scene scale tolerance
-        # scene_scale_tol = 0.15
-        # print(f"Scene scale tolerance: {scene_scale_tol:.3f}")
-
         print(">>> Set the scene scale as a parameter to optimize")
         print("Do the final check for the scene scale")
         res_scale = 1.0
@@ -997,7 +968,7 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
         root_transl_cam = root_transl_cam.reshape(-1, 3) # (len(cam_names) * N, 3)
         # check if all z of root_transl_cam are positive
         scale_update_iter = 0
-        max_scale_update_iter = 10
+        max_scale_update_iter = 100
         while not (root_transl_cam[:, 2] > 0).all() and scale_update_iter < max_scale_update_iter:
             # print("Some of the root_transl_cam have negative z values;")
             res_scale = res_scale * update_scale_factor
@@ -1018,8 +989,14 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
         else:
             print("All root_transl_cam have positive z values")
         residual_scene_scale = nn.Parameter(torch.tensor(res_scale, requires_grad=True).to(device))
-        # TEMP
-        # residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
+
+        # Visualize the initilization of 3D human and 3D world
+        if vis and first_cam_human_vertices is not None:
+            world_env = parse_to_save_data(scene, cam_names)
+            try:
+                show_env_human_in_viser(world_env=world_env, world_scale_factor=residual_scene_scale.item(), smplx_vertices_dict=first_cam_human_vertices, smplx_faces=smplx_layer.faces)
+            except:
+                import pdb; pdb.set_trace()
 
         # 1st stage; stage 1 is from 0% to 30%
         stage1_iter = list(range(0, int(niter * stage2_start_idx_percentage)))
@@ -1052,16 +1029,6 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
                     print("Known params init")
                     
                     init_cam_centers = scene.get_im_poses()[:, :3, 3].detach()  # (N, 3)
-        
-                    # Compute distances between all pairs of cameras
-                    init_cam_center_dist_total = 0
-                    init_cam_center_dist_totalpairs_dist = []
-                    for i in range(len(init_cam_centers)):
-                        for j in range(i+1, len(init_cam_centers)):
-                            dist = torch.norm(init_cam_centers[i] - init_cam_centers[j])
-                            # init_cam_center_dist_total += dist
-                            init_cam_center_dist_totalpairs_dist.append(dist)
-                    init_cam_center_dist_total = torch.stack(init_cam_center_dist_totalpairs_dist)
                     
                     if False and vis:
                         # Visualize the initilization of 3D human and 3D world
