@@ -84,15 +84,15 @@ def copy_files():
     # Define source and destination directories
     # src_dir = Path("/scratch/partial_datasets/egoexo/hongsuk/egohumans/optim_outputs/2024nov19/num_of_cams4_num_of_humans4")
     # dst_dir = Path("/scratch/partial_datasets/egoexo/hongsuk/egohumans/optim_outputs/2024nov19/num_of_cams4_num_of_humans4_to_evaluate")
-    src_dir = Path("/scratch/partial_datasets/egoexo/hongsuk/egohumans/optim_outputs/2024nov19/num_of_cams2")
-    dst_dir = Path("/scratch/partial_datasets/egoexo/hongsuk/egohumans/optim_outputs/2024nov19/num_of_cams2_to_evaluate")
+    src_dir = Path("/scratch/partial_datasets/egoexo/hongsuk/egohumans/optim_outputs/2024nov25/num_of_cams4_num_of_humans0")
+    dst_dir = Path("/scratch/partial_datasets/egoexo/hongsuk/egohumans/optim_outputs/2024nov25/num_of_cams4_num_of_humans0_to_evaluate")
 
     # Create destination directory if it doesn't exist
     dst_dir.mkdir(parents=True, exist_ok=True)
     
     # Read the indicators file (assuming it's in the same directory as the script)
     script_dir = Path(__file__).parent
-    indicators_file = script_dir / "file_indicators_num_cams.txt"
+    indicators_file = script_dir / "file_indicators.txt" # _num_cams
     
     # Get the list of files to copy
     indicators = read_file_indicators(indicators_file)

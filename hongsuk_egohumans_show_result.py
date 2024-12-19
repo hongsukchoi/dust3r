@@ -137,29 +137,29 @@ def main(optim_output_pkl: str):
 
     # show the results
     try:
-        world_pred_cam_poses = {}
-        for cam_name in sorted(world_gt_cameras.keys()):
-            world_pred_cam_poses[cam_name] = world_env[cam_name]['cam2world']
+        # world_pred_cam_poses = {}
+        # for cam_name in sorted(world_gt_cameras.keys()):
+        #     world_pred_cam_poses[cam_name] = world_env[cam_name]['cam2world']
 
         
-        # Extract camera positions
-        gt_cam_positions = np.array([pose[:3, 3] for pose in world_gt_cam_poses.values()])
-        pred_cam_positions = np.array([pose[:3, 3] for pose in world_pred_cam_poses.values()])
+        # # Extract camera positions
+        # gt_cam_positions = np.array([pose[:3, 3] for pose in world_gt_cam_poses.values()])
+        # pred_cam_positions = np.array([pose[:3, 3] for pose in world_pred_cam_poses.values()])
         
-        # Perform Procrustes alignment
-        scale, rotation, translation = procrustes_alignment(pred_cam_positions, gt_cam_positions)
+        # # Perform Procrustes alignment
+        # scale, rotation, translation = procrustes_alignment(pred_cam_positions, gt_cam_positions)
         
-        print("Procrustes Alignment Results:")
-        print(f"Scale: {scale}")
-        print(f"Rotation:\n{rotation}")
-        print(f"Translation:\n{translation}")
+        # print("Procrustes Alignment Results:")
+        # print(f"Scale: {scale}")
+        # print(f"Rotation:\n{rotation}")
+        # print(f"Translation:\n{translation}")
         
-        # Optionally, apply the transformation to check alignment
-        aligned_pred_positions = scale * (pred_cam_positions @ rotation.T) + translation
+        # # Optionally, apply the transformation to check alignment
+        # aligned_pred_positions = scale * (pred_cam_positions @ rotation.T) + translation
         
-        # Compute alignment error
-        error = np.mean(np.linalg.norm(aligned_pred_positions - gt_cam_positions, axis=1))
-        print(f"Average alignment error: {error:.4f} units")
+        # # Compute alignment error
+        # error = np.mean(np.linalg.norm(aligned_pred_positions - gt_cam_positions, axis=1))
+        # print(f"Average alignment error: {error:.4f} units")
 
         # for cam_idx, cam_name in enumerate(sorted(world_gt_cameras.keys())):
         #     world_env[cam_name]['cam2world'][:3, 3] = aligned_pred_positions[cam_idx]

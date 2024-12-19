@@ -1,4 +1,4 @@
-output_dir1 = "/home/hongsuk/projects/dust3r/outputs/egohumans/2024nov14_good_cams_focal_fixed/num_of_cams2"
+output_dir1 = "/scratch/partial_datasets/egoexo/hongsuk/egohumans/optim_outputs/2024nov25_noscaleinit/num_of_cams4"
 output_dir2 = "/home/hongsuk/projects/dust3r/outputs/egohumans/2024nov14_good_cams_focal_fixed/num_of_cams4"
 
 import os
