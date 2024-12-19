@@ -337,12 +337,13 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
             right_hand_pose = params['right_hand_pose'].reshape(1, -1).to(device)
             transl = params['transl'].reshape(1, -1).to(device)
             
-            smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose, transl=transl)
+            smplx_output = smplx_layer(body_pose=body_pose, betas=betas, global_orient=global_orient, left_hand_pose=left_hand_pose, right_hand_pose=right_hand_pose, transl=torch.zeros((1, 3)).to(device))
 
             # Extract main body joints and visualize 3D skeleton from SMPL-X
             smplx_joints = smplx_output['joints']
             # Save the root joint (pelvis) translation for later compensation
-            params['org_cam_root_transl'] = smplx_joints[0, 0,:3].detach().cpu().numpy()
+            params['smpl_coord_root_transl'] = smplx_joints[0, 0,:3].detach().cpu().numpy()
+            # params['org_cam_transl'] = transl
 
             smplx_coco_main_body_joints = smplx_joints[0, smplx_main_body_joint_idx, :].detach().cpu().numpy()
             vitpose_2d_keypoints = multiview_multiperson_pose2d[human_name][cam_name][coco_main_body_joint_idx].cpu().numpy() # (J, 2+1)
@@ -462,7 +463,9 @@ def init_human_params(smplx_layer, multiview_multiple_human_cam_pred, multiview_
             missing_human_init_trans_in_other_cam = multiview_multiperson_init_trans[missing_human_name][other_cam_name]
             missing_human_init_trans_in_first_cam = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_init_trans_in_other_cam + other_cam_to_first_cam_transformation[:3, 3]
             # compenstate rotation (translation from origin to root joint was not cancled)
-            root_transl_compensator = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_params_in_other_cam['org_cam_root_transl'] 
+            root_transl_compensator = other_cam_to_first_cam_transformation[:3, :3] @ missing_human_params_in_other_cam['smpl_coord_root_transl']  
+            # - current root_transl in SMPL coordinate
+            # , but doesn't matter anyway I remove the root_transl always - Hongsuk
             missing_human_init_trans_in_first_cam = missing_human_init_trans_in_first_cam + root_transl_compensator
             #
             missing_human_params_in_other_cam['root_transl'] = torch.from_numpy(missing_human_init_trans_in_first_cam).reshape(1, -1).to(device)
