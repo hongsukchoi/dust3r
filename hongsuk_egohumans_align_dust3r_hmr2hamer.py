@@ -215,7 +215,7 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
         bbox_areas = 0
         
         for cam_name, bbox in multiview_multiperson_bboxes[human_name].items():
-            bbox_area = bbox[2] * bbox[3]
+            bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             det_score = bbox[4]
             loss_weights.append(det_score / bbox_area)
             # bbox_areas += bbox_area # Don't need this for now
