@@ -555,7 +555,7 @@ def get_human_loss(smplx_layer_dict, num_of_humans_for_optimization, humans_opti
         bbox_areas = 0
         
         for cam_name, bbox in multiview_multiperson_bboxes[human_name].items():
-            bbox_area = bbox[2] * bbox[3]
+            bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             det_score = bbox[4]
             loss_weights.append(det_score / bbox_area)
             bbox_areas += bbox_area
@@ -673,39 +673,37 @@ def show_ground_truth_scene(ground_truth, scene_point_size=0.006, point_shape='c
             color=[0, 1, 0]
         )
     # set break point for debugging
-    import pdb; pdb.set_trace()
     print("Done visualizing")
 
 def main():
-    dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/unc_basketball_03-30-23_02_10/preprocessing/dust3r_world_env_2/000045/images/dust3r_network_output_pointmaps_images.pkl'
-    dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/unc_basketball_03-30-23_02_10/preprocessing/dust3r_world_env_2/000045/images/dust3r_global_alignment_results.pkl'
-    vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/unc_basketball_03-30-23_02_10/45/input_data.pkl'
-    run(vis=True, dust3r_network_output_path=dust3r_network_output_path, dust3r_ga_output_path=dust3r_ga_output_path, vitpose_and_gt_path=vitpose_and_gt_path)
-    # import json
-    # with open('egoexo_sequences.json', 'r') as f:
-    #     sequences = json.load(f)
-    # # Process a portion of sequences based on part index
-    # part_idx = 2  # Which part to process (1-based index)
-    # total_parts = 5  # Total number of parts to divide sequences into
-    
-    # # Calculate start and end indices for this part
-    # num_sequences = len(sequences)
-    # sequences_per_part = num_sequences // total_parts
-    # start_idx = (part_idx - 1) * sequences_per_part
-    # end_idx = start_idx + sequences_per_part if part_idx < total_parts else num_sequences
-    
-    # # Select subset of sequences for this part
-    # sequences = sequences[start_idx:end_idx]
-    # print(f"Processing part {part_idx}/{total_parts}: {len(sequences)} sequences from index {start_idx} to {end_idx}")
+    root_dir = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_arxiv/val'
+    preprocess_dir = '/scratch/partial_datasets/egoexo/preprocess_20241209_arxiv/takes'
+    sequence_dir_list = sorted(glob.glob(osp.join(root_dir, '*')))
+    # TEMP
+    # sequence_dir_list = sequence_dir_list[:len(sequence_dir_list)//2]
+    sequence_dir_list = sequence_dir_list[len(sequence_dir_list)//2:]
+    # random shuffle
+    # import random
+    # random.shuffle(sequence_dir_list)
 
-    # for sequence in tqdm.tqdm(sequences):
-    #     run(dust3r_network_output_path=sequence['dust3r_network_output_path'], dust3r_ga_output_path=sequence['dust3r_ga_output_path'], vitpose_and_gt_path=sequence['vitpose_gt_path'])
+    output_dir = './outputs/egoexo/optim_outputs_dec19_v2'
+    for sequence_dir in sequence_dir_list:
+        vitpose_and_gt_path = glob.glob(osp.join(sequence_dir, '*', 'input_data.pkl'))[0]
+        frame_idx = int(vitpose_and_gt_path.split('/')[-2])
+        sequence_name = osp.basename(sequence_dir)
+        dust3r_network_output_path = osp.join(preprocess_dir, sequence_name, 'preprocessing', 'dust3r_world_env_2', f'{frame_idx:06d}', 'images', 'dust3r_network_output_pointmaps_images.pkl')
+        dust3r_ga_output_path = osp.join(preprocess_dir, sequence_name, 'preprocessing', 'dust3r_world_env_2', f'{frame_idx:06d}', 'images', 'dust3r_global_alignment_results.pkl')
 
-def run(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl', dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl', vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'):    
+        try:
+            run(output_dir=osp.join(output_dir, sequence_name), vis=False, dust3r_network_output_path=dust3r_network_output_path, dust3r_ga_output_path=dust3r_ga_output_path, vitpose_and_gt_path=vitpose_and_gt_path)
+        except:
+            print(f"Error in {sequence_name} {frame_idx}")
+
+
+def run(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool = False, vis: bool = False, dust3r_network_output_path: str = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl', dust3r_ga_output_path: str = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl', vitpose_and_gt_path: str = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'):    
     # dust3r_network_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_network_output_pointmaps_images.pkl'
     # dust3r_ga_output_path = '/scratch/partial_datasets/egoexo/preprocess_20241110_camera_ready/takes/iiith_cooking_59_2/preprocessing/dust3r_world_env_2/007795/images/dust3r_global_alignment_results.pkl'
     # vitpose_and_gt_path = '/scratch/partial_datasets/egoexo/egoexo4d_v2_mvopti/run_08/val/iiith_cooking_59_2/7795/input_data.pkl'
-    
     
     sequence_name = dust3r_network_output_path.split('/')[6]  #'utokyo_cpr_2005_34_2'
     frame_idx = int(dust3r_network_output_path.split('/')[-3]) #384 # for testing
@@ -719,15 +717,17 @@ def run(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool =
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
 
     # Parameters I am tuning
-    human_loss_weight = 5.0
+    human_loss_weight = 1.0
     stage2_start_idx_percentage = 0.2 #0.0 # 0.5 #0.2
-    stage3_start_idx_percentage = 0.8 #0.9 
+    stage3_start_idx_percentage = 0.85 #0.9 
     min_niter = 500
+    max_niter = 2000
     niter = 300
     niter_factor = 15 #20 ##10 # niter = int(niter_factor * scene_scale)
     lr = 0.015
     dist_tol = 0.3
     scale_increasing_factor = 1.3
+    update_scale_factor = 1.1
     num_of_humans_for_optimization = None
     focal_break = 20 # default is 20 in dust3r code
     shape_prior_weight = 1.0
@@ -893,6 +893,44 @@ def run(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool =
     human_loss_timer = Timer()
     gradient_timer = Timer()
 
+    print(">>> Set the scene scale as a parameter to optimize")
+    print("Do the final check for the scene scale")
+    res_scale = 1.0
+    multiview_cam2world_4by4  = scene.get_im_poses().detach()  # (len(cam_names), 4, 4)
+    multiview_world2cam_4by4 = torch.inverse(multiview_cam2world_4by4) # (len(cam_names), 4, 4)
+
+    root_transl_list = []
+    for human_name in human_params.keys():
+        root_transl = human_params[human_name]['transl'].detach()
+        root_transl_list.append(root_transl)
+    root_transl_list = torch.stack(root_transl_list) # (N, 1, 3)
+    # Apply cam2world to the root_transl
+    root_transl_cam = (multiview_world2cam_4by4[:, None, :3, :3] @ root_transl_list[None, :, :, :].transpose(2,3)).transpose(2,3) + multiview_world2cam_4by4[:, None, :3, 3:].transpose(2,3) # (len(cam_names), N, 1, 3)
+    root_transl_cam = root_transl_cam.reshape(-1, 3) # (len(cam_names) * N, 3)
+    # check if all z of root_transl_cam are positive
+    scale_update_iter = 0
+    max_scale_update_iter = 10
+    while not (root_transl_cam[:, 2] > 0).all() and scale_update_iter < max_scale_update_iter:
+        # print("Some of the root_transl_cam have negative z values;")
+        res_scale = res_scale * update_scale_factor
+        niter = min(max(int(niter * update_scale_factor), min_niter), max_niter)
+
+        print(f"Rescaling the scene scale to {res_scale:.3f}")
+
+        # Apply cam2world to the root_transl
+        root_transl_cam = (multiview_world2cam_4by4[:, None, :3, :3] @ root_transl_list[None, :, :, :].transpose(2,3)).transpose(2,3) \
+                + res_scale * multiview_world2cam_4by4[:, None, :3, 3:].transpose(2,3) # (len(cam_names), N, 1, 3)
+        root_transl_cam = root_transl_cam.reshape(-1, 3) # (len(cam_names) * N, 3)
+        scale_update_iter += 1
+    if scale_update_iter == max_scale_update_iter:
+        print("Warning: Maximum number of scale update iterations reached")
+        print("Set niter to 300")
+        res_scale = 1.0
+        niter = 300
+    else:
+        print("All root_transl_cam have positive z values")
+    residual_scene_scale = nn.Parameter(torch.tensor(res_scale, requires_grad=True).to(device))
+    
     # 1st stage; stage 1 is from 0% to 30%
     stage1_iter = list(range(0, int(niter * stage2_start_idx_percentage)))
     # 2nd stage; stage 2 is from 30% to 60%
@@ -900,8 +938,8 @@ def run(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool =
     # 3rd stage; stage 3 is from 60% to 100%
     stage3_iter = list(range(int(niter * stage3_start_idx_percentage), niter))
 
-    print(">>> Set the scene scale as a parameter to optimize")
-    residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
+    # print(">>> Set the scene scale as a parameter to optimize")
+    # residual_scene_scale = nn.Parameter(torch.tensor(1., requires_grad=True).to(device))
 
     human_params = init_human_params_v0(human_params, device)
 
@@ -994,7 +1032,9 @@ def run(output_dir: str = './outputs/egoexo/optim_outputs', use_gt_focal: bool =
             losses['human_loss'] = human_loss_weight * losses['human_loss']
             human_loss_timer.toc()
 
-            if num_of_cams > 2 and (bar.n in stage2_iter or bar.n in stage3_iter):
+            # if num_of_cams > 2 and (bar.n in stage2_iter or bar.n in stage3_iter):
+            # TEMP
+            if (bar.n in stage2_iter or bar.n in stage3_iter):
                 # Get scene loss
                 scene_loss_timer.tic()
                 losses['scene_loss'] = scene.dust3r_loss()
