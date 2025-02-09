@@ -630,7 +630,8 @@ def show_optimization_results(world_env, human_params, smplx_layer):
         smplx_vertices_dict[human_name] = smplx_vertices[0].detach().cpu().numpy()
     try:
         show_env_human_in_viser(world_env=world_env, world_scale_factor=1., smplx_vertices_dict=smplx_vertices_dict, smplx_faces=smplx_layer.faces)
-    except:
+    except Exception as e:
+        print(f"Error in showing the environment and human in viser: {e}")
         import pdb; pdb.set_trace()
     
 def convert_human_params_to_numpy(human_params):
@@ -643,7 +644,7 @@ def convert_human_params_to_numpy(human_params):
 
     return human_params_np
 
-def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_human_optim: int=-1, use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov16_name_uniform_cams', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/2024nov16_name_uniform_cams', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov13', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
+def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_human_optim: int=-1, use_gt_focal: bool = False, sel_big_seqs: List = [], sel_small_seq_range: List[int] = [], optimize_human: bool = True, dust3r_raw_output_dir: str = './outputs/egohumans/dust3r_raw_outputs/2024nov13_good_cams', dust3r_ga_output_dir: str = './outputs/egohumans/dust3r_ga_outputs_and_gt_cameras/2024nov13_good_cams', vitpose_hmr2_hamer_output_dir: str = '/scratch/one_month/2024_10/lmueller/egohuman/camera_ready', identified_vitpose_hmr2_hamer_output_dir: str = '/scratch/partial_datasets/egoexo/hongsuk/egohumans/vitpose_hmr2_hamer_predictions_2024nov13', egohumans_data_root: str = './data/egohumans_data', vis: bool = False):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     vis_output_path = osp.join(output_dir, 'vis')
     Path(vis_output_path).mkdir(parents=True, exist_ok=True)
@@ -692,12 +693,15 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
         optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25',  f'num_of_cams{num_of_cams}_num_of_humans{num_of_humans_for_optimization}')
     else:
         optim_output_dir = osp.join(output_dir, 'optim_outputs', f'2024nov25',  f'num_of_cams{num_of_cams}')
-    # optim_output_dir = osp.join(output_dir, 'optim_outputs', f'tmp',  f'num_of_cams{num_of_cams}')
+    # TEMP
+    optim_output_dir = osp.join(output_dir, 'optim_outputs', f'tmp',  f'num_of_cams{num_of_cams}')
 
 
     print(f"Optimizing output directory: {optim_output_dir}")
     Path(optim_output_dir).mkdir(parents=True, exist_ok=True)
-    dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, identified_vitpose_hmr2_hamer_output_dir=identified_vitpose_hmr2_hamer_output_dir, batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple)
+    dataset, dataloader = create_dataloader(egohumans_data_root, optimize_human=optimize_human, dust3r_raw_output_dir=dust3r_raw_output_dir, dust3r_ga_output_dir=dust3r_ga_output_dir, vitpose_hmr2_hamer_output_dir=vitpose_hmr2_hamer_output_dir, identified_vitpose_hmr2_hamer_output_dir=identified_vitpose_hmr2_hamer_output_dir, \
+        batch_size=1, split='test', subsample_rate=subsample_rate, cam_names=cam_names, num_of_cams=num_of_cams, selected_big_seq_list=selected_big_seq_list, selected_small_seq_start_and_end_idx_tuple=selected_small_seq_start_and_end_idx_tuple, \
+        use_sam2_mask=True)
 
     # Dust3r Config for the global alignment
     mode = GlobalAlignerMode.PointCloudOptimizer #if num_of_cams > 2 else GlobalAlignerMode.PairViewer
@@ -749,7 +753,7 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
             world_cam_poses[cam_name] = cam2world
         world_colmap_pointcloud_xyz = sample['world_colmap_pointcloud_xyz']
         world_colmap_pointcloud_rgb = sample['world_colmap_pointcloud_rgb']
-        if vis:
+        if False and vis:
             try:
                 vis_decode_human_params_and_cameras(world_multiple_human_3d_annot, world_cam_poses, smpl_layer, world_colmap_pointcloud_xyz, world_colmap_pointcloud_rgb, device)
             except:
@@ -958,7 +962,8 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
             world_env = parse_to_save_data(scene, cam_names)
             try:
                 show_env_human_in_viser(world_env=world_env, world_scale_factor=1., smplx_vertices_dict=first_cam_human_vertices, smplx_faces=smplx_layer.faces)
-            except:
+            except Exception as e:
+                print(f"Error in showing the environment and human in viser: {e}")
                 import pdb; pdb.set_trace()
 
         # Compute the sum of distances between camera centers; im_poses[:, :3, 3]
@@ -1187,7 +1192,7 @@ def main(output_dir: str = './outputs/egohumans/', num_of_cams: int = 4, num_hum
         with open(osp.join(optim_output_dir, f'{output_name}.pkl'), 'wb') as f:
             pickle.dump(total_output, f)    
         
-        if vis:
+        if True or vis:
             show_optimization_results(total_output['our_pred_world_cameras_and_structure'], human_params, smplx_layer_dict[1])
 
 if __name__ == '__main__':
