@@ -271,7 +271,7 @@ class PointCloudOptimizer(BasePCOptimizer):
                 _, i_j, scale = best_depthmaps[n]
                 depth = self.pred_i[i_j][:, :, 2]
                 self._set_depthmap(n, depth * scale)
-        init_loss = float(self()[0])
+        init_loss = float(self())
         print(' init loss =', init_loss)
         return init_loss
 
